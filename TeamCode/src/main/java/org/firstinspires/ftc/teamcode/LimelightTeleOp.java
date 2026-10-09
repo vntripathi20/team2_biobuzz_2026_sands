@@ -53,6 +53,8 @@ public class LimelightTeleOp extends LinearOpMode {
     private static final int START_PIPELINE = 0;
 
     // Auto-aim: turn power = AIM_KP * tx. Too slow -> raise it. Wobbles -> lower it.
+    // AIM_DIRECTION: set to 1.0 if the robot turns toward the target, -1.0 if it turns away.
+    private static final double AIM_DIRECTION = -1.0;
     private static final double AIM_KP = 0.02;
     private static final double AIM_MIN_POWER = 0.05;   // Enough power to actually move
     private static final double AIM_MAX_POWER = 0.5;    // Don't spin too fast
@@ -125,7 +127,7 @@ public class LimelightTeleOp extends LinearOpMode {
     private double aimTurnPower(double tx) {
         if (Math.abs(tx) < AIM_TOLERANCE_DEG) return 0.0;
 
-        double power = AIM_KP * tx;
+        double power = AIM_DIRECTION * AIM_KP * tx;
         // Make sure there is enough power to overcome friction.
         if (Math.abs(power) < AIM_MIN_POWER) power = Math.copySign(AIM_MIN_POWER, power);
         return Range.clip(power, -AIM_MAX_POWER, AIM_MAX_POWER);
