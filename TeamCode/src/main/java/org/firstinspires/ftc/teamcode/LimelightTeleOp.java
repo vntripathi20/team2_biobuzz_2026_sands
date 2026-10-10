@@ -8,6 +8,7 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.util.ElapsedTime;
 import com.qualcomm.robotcore.util.Range;
 
 import android.graphics.Bitmap;
@@ -22,8 +23,9 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamSource;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.util.List;
 
 /**
@@ -54,7 +56,7 @@ import java.util.List;
  * CAMERA FEED:
  *   Telemetry can only hold text, so the feed goes to the Driver Station's camera stream.
  *   After INIT, tap the three dots (top right) -> "Camera Stream". Needs the Limelight on
- *   its default IP (172.29.0.1, USB). Change LIMELIGHT_STREAM_URL if yours differs.
+ *   its default IP (172.29.0.1, USB). Change LIMELIGHT_HOST if yours differs.
  *
  * WHAT THE NUMBERS MEAN:
  *   tx  = how far LEFT (-) or RIGHT (+) the target is from the crosshair, in degrees
@@ -70,7 +72,8 @@ public class LimelightTeleOp extends LinearOpMode {
     // ----------------------------------------------------------------------------------
     private static final String LIMELIGHT_NAME = "limelight";
     private static final int START_PIPELINE = 0;
-    private static final String LIMELIGHT_STREAM_URL = "http://172.29.0.1:5800";
+    private static final String LIMELIGHT_HOST = "172.29.0.1";
+    private static final int LIMELIGHT_STREAM_PORT = 5800;
 
     // Auto-aim: turn power = AIM_KP * tx. Too slow -> raise it. Wobbles -> lower it.
     // AIM_DIRECTION: set to 1.0 if the robot turns toward the target, -1.0 if it turns away.
@@ -78,7 +81,19 @@ public class LimelightTeleOp extends LinearOpMode {
     private static final double AIM_KP = 0.02;
     private static final double AIM_MIN_POWER = 0.05;   // Enough power to actually move
     private static final double AIM_MAX_POWER = 0.5;    // Don't spin too fast
-    private static final double AIM_TOLERANCE_DEG = 1.0; // "Close enough" - stop turning
+    private static final double AIM_TOLERANCE_DEG = 1.5; // "Close enough" - stop turning
+
+    // Camera sits off-center, so "robot pointing at the ball" is NOT tx = 0.
+    // AIM_TARGET_TX_DEG is the tx you want to hold. To find it: put the ball dead ahead of the
+    // robot's center, read tx in telemetry, and enter that number. A camera mounted to the
+    // RIGHT sees the ball left of center, so this is negative.
+    private static final double AIM_TARGET_TX_DEG = -4.0;
+    // Smoothing for tx (0-1). Lower = smoother but slower to react. Stops jittery turning.
+    private static final double TX_SMOOTHING = 0.5;
+    // If the target disappears, keep turning toward the side it was last seen on for this
+    // long, so one dropped frame doesn't leave the robot facing away.
+    private static final double LOST_SEARCH_SECONDS = 1.0;
+    private static final double LOST_SEARCH_POWER = 0.15;
 
     // Follow: forward power = FOLLOW_KP * (FOLLOW_TARGET_AREA - ta). ta is how much of the
     // image the target fills, so a bigger ta means closer. Set FOLLOW_TARGET_AREA to the
@@ -97,7 +112,14 @@ public class LimelightTeleOp extends LinearOpMode {
     private Limelight3A limelight;
     private DcMotor leftFront, rightFront, leftRear, rightRear;
 
-    private final LimelightStream stream = new LimelightStream(LIMELIGHT_STREAM_URL);
+    private final LimelightStream stream =
+            new LimelightStream(LIMELIGHT_HOST, LIMELIGHT_STREAM_PORT);
+
+    // Follow state
+    private final ElapsedTime sinceSeen = new ElapsedTime();
+    private boolean haveSmoothedTx = false;
+    private double smoothedTx = 0.0;
+    private double lastError = 0.0;   // tx minus AIM_TARGET_TX_DEG, last time we saw the target
 
     private int pipeline = START_PIPELINE;
     private boolean lastDpadUp = false;
@@ -132,9 +154,25 @@ public class LimelightTeleOp extends LinearOpMode {
             double strafe = gamepad1.left_stick_x * 1.1;  // Counter imperfect strafing
             double turn = gamepad1.right_stick_x;
 
-            if (gamepad1.right_bumper && hasTarget) {
-                turn = aimTurnPower(result.getTx());
-                forward = followForwardPower(result.getTa());
+            if (gamepad1.right_bumper) {
+                if (hasTarget) {
+                    double tx = result.getTx();
+                    smoothedTx = haveSmoothedTx
+                            ? TX_SMOOTHING * tx + (1 - TX_SMOOTHING) * smoothedTx
+                            : tx;
+                    haveSmoothedTx = true;
+                    lastError = smoothedTx - AIM_TARGET_TX_DEG;
+                    sinceSeen.reset();
+
+                    turn = aimTurnPower(lastError);
+                    forward = followForwardPower(result.getTa());
+                } else if (haveSmoothedTx && sinceSeen.seconds() < LOST_SEARCH_SECONDS) {
+                    // Lost it for a moment - turn back toward where it was last seen.
+                    turn = AIM_DIRECTION * Math.copySign(LOST_SEARCH_POWER, lastError);
+                    forward = 0.0;
+                }
+            } else {
+                haveSmoothedTx = false;   // Start fresh next time the bumper is pressed
             }
 
             drive(forward, strafe, turn);
@@ -150,7 +188,8 @@ public class LimelightTeleOp extends LinearOpMode {
             }
             telemetry.addData("Follow", gamepad1.right_bumper ? "ON" : "off");
             telemetry.addData("Camera feed", stream.isStreaming()
-                    ? "live - Driver Station menu > Camera Stream" : "not connected");
+                    ? "live - Driver Station menu > Camera Stream"
+                    : "not connected: " + stream.getError());
             telemetry.update();
         }
 
@@ -161,13 +200,13 @@ public class LimelightTeleOp extends LinearOpMode {
 
     // ----------------------------------------------------------------------------------
     // 3. AUTO-AIM
-    // If the target is to the right (tx > 0), turn right; to the left, turn left.
-    // The further away from center, the faster we turn.
+    // error = tx minus AIM_TARGET_TX_DEG (how far the target is from where we want it).
+    // The further away it is, the faster we turn.
     // ----------------------------------------------------------------------------------
-    private double aimTurnPower(double tx) {
-        if (Math.abs(tx) < AIM_TOLERANCE_DEG) return 0.0;
+    private double aimTurnPower(double error) {
+        if (Math.abs(error) < AIM_TOLERANCE_DEG) return 0.0;
 
-        double power = AIM_DIRECTION * AIM_KP * tx;
+        double power = AIM_DIRECTION * AIM_KP * error;
         // Make sure there is enough power to overcome friction.
         if (Math.abs(power) < AIM_MIN_POWER) power = Math.copySign(AIM_MIN_POWER, power);
         return Range.clip(power, -AIM_MAX_POWER, AIM_MAX_POWER);
@@ -266,18 +305,25 @@ public class LimelightTeleOp extends LinearOpMode {
     // so the Driver Station's "Camera Stream" view can show it.
     // ----------------------------------------------------------------------------------
     private static class LimelightStream implements CameraStreamSource {
-        private final String url;
+        private final String host;
+        private final int port;
         private volatile boolean running = false;
         private volatile boolean streaming = false;
+        private volatile String error = "starting";
         private volatile Bitmap latest;
         private Thread thread;
 
-        LimelightStream(String url) {
-            this.url = url;
+        LimelightStream(String host, int port) {
+            this.host = host;
+            this.port = port;
         }
 
         boolean isStreaming() {
             return streaming;
+        }
+
+        String getError() {
+            return error;
         }
 
         void start() {
@@ -300,14 +346,20 @@ public class LimelightTeleOp extends LinearOpMode {
         }
 
         // Pulls JPEG images out of the stream by finding their start (FF D8) and end (FF D9).
+        // Uses a plain socket + hand-written HTTP request instead of HttpURLConnection,
+        // because Android (target SDK 28) blocks cleartext http:// in the normal HTTP classes.
         private void readLoop() {
             while (running) {
-                HttpURLConnection conn = null;
+                Socket socket = null;
                 try {
-                    conn = (HttpURLConnection) new URL(url).openConnection();
-                    conn.setConnectTimeout(2000);
-                    conn.setReadTimeout(2000);
-                    InputStream in = new BufferedInputStream(conn.getInputStream(), 64 * 1024);
+                    socket = new Socket();
+                    socket.connect(new InetSocketAddress(host, port), 2000);
+                    socket.setSoTimeout(3000);
+                    OutputStream out = socket.getOutputStream();
+                    out.write(("GET / HTTP/1.0\r\nHost: " + host + "\r\n\r\n").getBytes("US-ASCII"));
+                    out.flush();
+                    error = "connected, waiting for frames";
+                    InputStream in = new BufferedInputStream(socket.getInputStream(), 64 * 1024);
                     ByteArrayOutputStream buf = new ByteArrayOutputStream();
                     boolean inImage = false;
                     int prev = -1, b;
@@ -334,10 +386,16 @@ public class LimelightTeleOp extends LinearOpMode {
                         prev = b;
                     }
                 } catch (Exception e) {
-                    // Camera not reachable yet or connection dropped - retry below.
+                    // Camera not reachable yet or connection dropped - show why, retry below.
+                    error = e.getClass().getSimpleName() + ": " + e.getMessage();
                 } finally {
                     streaming = false;
-                    if (conn != null) conn.disconnect();
+                    if (socket != null) {
+                        try {
+                            socket.close();
+                        } catch (Exception ignored) {
+                        }
+                    }
                 }
                 try {
                     Thread.sleep(500);
