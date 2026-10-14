@@ -304,7 +304,7 @@ public class LimelightTeleOp extends LinearOpMode {
     // Reads the Limelight's MJPEG stream on a background thread and keeps the newest frame
     // so the Driver Station's "Camera Stream" view can show it.
     // ----------------------------------------------------------------------------------
-    private static class LimelightStream implements CameraStreamSource {
+    static class LimelightStream implements CameraStreamSource {
         private final String host;
         private final int port;
         private volatile boolean running = false;
