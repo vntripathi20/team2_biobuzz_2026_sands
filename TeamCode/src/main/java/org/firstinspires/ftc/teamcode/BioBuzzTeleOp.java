@@ -42,11 +42,14 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  *
  * CONTROLS (gamepad 1):
  *   Left stick        drive / strafe
- *   Right stick X     turn (only when auto-aim is OFF, or no hive has been seen yet,
- *                     unless DRIVER_CAN_OVERRIDE_AIM is true)
+ *   Right stick X     turn (only works when auto-aim is OFF, unless
+ *                     DRIVER_CAN_OVERRIDE_AIM is true)
  *   Right bumper      toggle auto-aim ON / OFF   (starts ON)
  *   Left bumper       toggle shooter spin-up ON / OFF (starts OFF)
- *   Right trigger     SHOOT (feeds when shooter is at speed)
+ *   Right trigger     AUTO-SHOOT: hold it. Spins up the shooter, then feeds once the
+ *                     robot is aimed at the hive AND the flywheels are at speed
+ *   A                 MANUAL shoot: hold it. Feeds once the flywheels are at speed, with
+ *                     no aim check (backup if the camera isn't working)
  *   Left trigger      INTAKE (outer + inner)
  *   B                 reverse intake (spit out jams)
  *   D-pad left        AprilTag pipeline (aiming)
@@ -277,17 +280,25 @@ public class BioBuzzTeleOp extends LinearOpMode {
             // ------------------------------------------------------------------------------
             // SHOOTER + INTAKE
             // ------------------------------------------------------------------------------
-            updateShooter();
-            boolean atSpeed = shooterAtSpeed();
+            // RT = AUTO-SHOOT: spins the shooter up and feeds only once we are aimed at the
+            // hive AND the flywheels are at speed. A = MANUAL shoot: feeds once the flywheels
+            // are at speed, no aim check (a backup if the camera isn't working).
+            boolean autoShootHeld = gamepad1.right_trigger > TRIGGER_THRESHOLD;
+            boolean manualShootHeld = gamepad1.a;
+            boolean spinning = shooterEnabled || autoShootHeld || manualShootHeld;
+
+            updateShooter(spinning);
+            boolean atSpeed = shooterAtSpeed(spinning);
             boolean aimed = haveHive && sinceSeen.seconds() < READY_MAX_AGE_SECONDS
                     && Math.abs(lastError) < AIM_TOLERANCE_DEG;
-            boolean readyToShoot = shooterEnabled && atSpeed && aimed;
+            boolean readyToShoot = spinning && atSpeed && aimed;
 
             // Rumble once each time we become ready, so the driver can feel it.
             if (readyToShoot && !wasReady) gamepad1.rumble(150);
             wasReady = readyToShoot;
 
-            updateIntake(atSpeed);
+            boolean feedNow = (autoShootHeld && atSpeed && aimed) || (manualShootHeld && atSpeed);
+            updateIntake(feedNow);
 
             // ------------------------------------------------------------------------------
             // TELEMETRY
@@ -303,7 +314,12 @@ public class BioBuzzTeleOp extends LinearOpMode {
             telemetry.addData("Hive tx error", haveHive ? String.format("%.1f deg", lastError) : "-");
             telemetry.addData("Gyro yaw (left turn = up)", "%.1f deg", yaw);
             telemetry.addData("Hive distance", haveDistance ? String.format("%.2f m", smoothedDistance) : "-");
-            telemetry.addData("Shooter", shooterEnabled ? "SPINNING" : "off");
+            telemetry.addData("Shooter", spinning ? "SPINNING" : "off");
+            telemetry.addData("Shoot", feedNow ? "FIRING"
+                    : autoShootHeld ? (!atSpeed ? "auto: waiting for flywheels"
+                                                : !aimed ? "auto: waiting for aim" : "auto")
+                    : manualShootHeld ? "manual: waiting for flywheels"
+                    : "-");
             telemetry.addData("Target RPM", "%.0f", targetRpm);
             telemetry.addData("Inner / Outer RPM", "%.0f / %.0f", rpmOf(innerShooter), rpmOf(outerShooter));
             telemetry.addData("READY TO SHOOT", readyToShoot ? "YES" : "no");
@@ -418,8 +434,8 @@ public class BioBuzzTeleOp extends LinearOpMode {
         return DEFAULT_SHOOTER_RPM;
     }
 
-    private void updateShooter() {
-        setShooterRpm(shooterEnabled ? targetRpm : 0.0);
+    private void updateShooter(boolean spinning) {
+        setShooterRpm(spinning ? targetRpm : 0.0);
     }
 
     private void setShooterRpm(double rpm) {
@@ -432,20 +448,21 @@ public class BioBuzzTeleOp extends LinearOpMode {
         return Math.abs(motor.getVelocity()) * 60.0 / SHOOTER_TICKS_PER_REV;
     }
 
-    private boolean shooterAtSpeed() {
-        if (!shooterEnabled) return false;
+    private boolean shooterAtSpeed(boolean spinning) {
+        if (!spinning) return false;
         return Math.abs(rpmOf(innerShooter) - targetRpm) < SHOOTER_RPM_TOLERANCE
                 && Math.abs(rpmOf(outerShooter) - targetRpm) < SHOOTER_RPM_TOLERANCE;
     }
 
     // ----------------------------------------------------------------------------------
     // 5. INTAKE
-    // LT = intake both stages, RT = feed the shooter (only once it is at speed),
+    // LT = intake both stages. feedNow = the shoot conditions are met (RT auto-shoot or A
+    // manual shoot), so the inner stage pushes a piece into the flywheels.
     // B = reverse. Reverse wins, then shoot, then intake.
     // ----------------------------------------------------------------------------------
-    private void updateIntake(boolean shooterAtSpeed) {
+    private void updateIntake(boolean feedNow) {
         boolean intake = gamepad1.left_trigger > TRIGGER_THRESHOLD;
-        boolean shoot = gamepad1.right_trigger > TRIGGER_THRESHOLD;
+        boolean shootHeld = gamepad1.right_trigger > TRIGGER_THRESHOLD || gamepad1.a;
 
         double inner = 0.0;
         double outer = 0.0;
@@ -458,11 +475,11 @@ public class BioBuzzTeleOp extends LinearOpMode {
                 inner = INTAKE_POWER;
                 outer = INTAKE_POWER;
             }
-            // Only feed the flywheels once they are up to speed, so shots are consistent.
-            if (shoot && shooterAtSpeed) {
+            // Only feed when the shoot conditions are met, so shots are consistent.
+            if (feedNow) {
                 inner = FEED_POWER;
-            } else if (shoot) {
-                inner = 0.0;   // Wait for the flywheels; don't push a piece into slow wheels.
+            } else if (shootHeld) {
+                inner = 0.0;   // Waiting for flywheels/aim; don't push a piece in early.
             }
         }
 
