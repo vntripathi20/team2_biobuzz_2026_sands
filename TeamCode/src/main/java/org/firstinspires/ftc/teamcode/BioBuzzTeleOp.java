@@ -41,7 +41,8 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  *   Left trigger      INTAKE (outer + inner)
  *   B                 reverse intake (spit out jams)
  *   D-pad left        AprilTag pipeline (aiming)
- *   D-pad right       Pollen pipeline (see what the model detects; auto-aim pauses)
+ *   D-pad right       Pollen pipeline (see what the model detects; auto-aim pauses).
+ *                     Disabled until POLLEN_ENABLED is set to true.
  *
  * HIVE TAGS:  BLUE = IDs 38-45,  RED = IDs 30-37 (both sides of each hive).
  *
@@ -64,6 +65,10 @@ public class BioBuzzTeleOp extends LinearOpMode {
     private static final int LIMELIGHT_STREAM_PORT = 5800;
     private static final int APRILTAG_PIPELINE = 0;
     private static final int POLLEN_PIPELINE = 1;      // TODO: set to your pollen model's pipeline
+    // The camera is mounted to see the hive tags, so it can't see pollen on the floor.
+    // Leave this false so D-pad right can't switch away from AprilTags and pause aiming.
+    // Set it to true once pollen detection has its own camera/pipeline.
+    private static final boolean POLLEN_ENABLED = false;
 
     // --- Hive tag IDs (both sides of each hive) ---
     private static final int BLUE_HIVE_MIN_ID = 38;
@@ -397,7 +402,7 @@ public class BioBuzzTeleOp extends LinearOpMode {
             haveHive = false;
             haveDistance = false;
         }
-        if (gamepad1.dpad_right && pipeline != POLLEN_PIPELINE) {
+        if (POLLEN_ENABLED && gamepad1.dpad_right && pipeline != POLLEN_PIPELINE) {
             pipeline = POLLEN_PIPELINE;
             limelight.pipelineSwitch(pipeline);
             haveHive = false;
