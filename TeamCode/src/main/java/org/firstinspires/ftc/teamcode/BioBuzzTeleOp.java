@@ -27,9 +27,11 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  *              alliance. While you drive, the robot turns itself to keep the hive centered
  *              (you keep control of forward/strafe). When the tag is out of view, it keeps
  *              turning toward the direction the hive was last seen, using the gyro (IMU),
- *              and snaps back onto the tag as soon as it sees it again. It never gives
- *              turning back to the stick while auto-aim is on and a hive has been seen
- *              (see DRIVER_CAN_OVERRIDE_AIM). Press right bumper to turn auto-aim off.
+ *              and snaps back onto the tag as soon as it sees it again. If the tag is still
+ *              missing after SCAN_AFTER_LOST_SECONDS, it SCANS: spins slowly (toward the side
+ *              the tag was last seen on) until the camera finds it. While auto-aim is on it
+ *              keeps control of turning (see DRIVER_CAN_OVERRIDE_AIM). Press right bumper to
+ *              turn auto-aim off and get the stick back.
  *   SHOOTER:   The flywheel RPM is picked from the distance to the hive tag using the
  *              SHOOTER_TABLE below. RT only feeds a game piece once the flywheels are up
  *              to speed.
@@ -97,6 +99,15 @@ public class BioBuzzTeleOp extends LinearOpMode {
     // We only call the robot "aimed and ready to shoot" if the tag was seen this recently.
     // (When the tag is out of view the robot aims from gyro memory, which is less exact.)
     private static final double READY_MAX_AGE_SECONDS = 0.5;
+    // --- Scanning: spin to look for the hive when it can't be found ---
+    // If the tag has been out of view this long, stop heading for the remembered direction
+    // and start spinning to search for it.
+    private static final double SCAN_AFTER_LOST_SECONDS = 1.0;
+    // Spin power while scanning. Keep it slow so the camera can catch the tag; raise it
+    // if the robot doesn't move, lower it if the camera blurs or it overshoots the tag.
+    private static final double SCAN_POWER = 0.25;
+    // True = also scan from the very start, before any hive tag has ever been seen.
+    private static final boolean SCAN_WHEN_NEVER_SEEN = true;
     // If true, pushing the right stick past AIM_DRIVER_OVERRIDE takes over turning from
     // auto-aim (the old behavior). False = auto-aim always controls turning while it is on.
     private static final boolean DRIVER_CAN_OVERRIDE_AIM = false;
@@ -178,6 +189,9 @@ public class BioBuzzTeleOp extends LinearOpMode {
     // the tag was seen. Used to keep aiming when the tag is out of view.
     private boolean haveHiveYaw = false;
     private double hiveYawDeg = 0.0;
+    // Which way to spin when scanning: +1 = toward the right (clockwise), -1 = left. Set to
+    // the side the tag was last seen on, so the search starts where it most likely went.
+    private double scanSign = 1.0;
     private boolean haveDistance = false;
     private double smoothedDistance = 0.0;
     private double targetRpm = DEFAULT_SHOOTER_RPM;
@@ -234,21 +248,28 @@ public class BioBuzzTeleOp extends LinearOpMode {
                 // yaw is smaller than ours.
                 hiveYawDeg = wrapDeg(yaw - lastError);
                 haveHiveYaw = true;
+                scanSign = lastError >= 0 ? 1.0 : -1.0;
             }
 
-            // Aim mode: "TAG" = steering on the live tag, "GYRO" = tag out of view so we
-            // steer toward the remembered direction, "none" = nothing to aim at (yet).
+            // Aim mode: "TAG" = steering on the live tag, "GYRO" = tag just left view so we
+            // steer toward the remembered direction, "SCAN" = tag still missing so we spin
+            // to look for it, "none" = nothing to aim at.
             String aimMode = "none";
             if (aimEnabled && !driverTurning && pipeline == APRILTAG_PIPELINE) {
                 if (hive != null) {
                     turn = aimTurnPower(lastError);
                     aimMode = "TAG";
-                } else if (haveHiveYaw) {
+                } else if (haveHiveYaw && sinceSeen.seconds() < SCAN_AFTER_LOST_SECONDS) {
                     // Same sign convention as the tag error: convert the heading error
                     // (how far we must rotate counterclockwise) into the equivalent tx error.
                     double gyroError = -wrapDeg(hiveYawDeg - yaw);
                     turn = aimTurnPower(gyroError);
                     aimMode = "GYRO";
+                } else if (haveHiveYaw || SCAN_WHEN_NEVER_SEEN) {
+                    // Spin toward the side the tag was last seen on. Using AIM_DIRECTION keeps
+                    // "right" meaning the same physical direction as the tag aiming above.
+                    turn = AIM_DIRECTION * scanSign * SCAN_POWER;
+                    aimMode = "SCAN";
                 }
             }
             drive(forward, strafe, turn);
@@ -277,7 +298,8 @@ public class BioBuzzTeleOp extends LinearOpMode {
                     : driverTurning ? "paused (driver turning)"
                     : aimMode.equals("TAG") ? "AIMING (tag in view)"
                     : aimMode.equals("GYRO") ? "AIMING (tag out of view, using gyro)"
-                    : "no hive seen yet");
+                    : aimMode.equals("SCAN") ? "SCANNING for the hive"
+                    : "idle");
             telemetry.addData("Hive tx error", haveHive ? String.format("%.1f deg", lastError) : "-");
             telemetry.addData("Gyro yaw (left turn = up)", "%.1f deg", yaw);
             telemetry.addData("Hive distance", haveDistance ? String.format("%.2f m", smoothedDistance) : "-");
