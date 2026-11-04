@@ -8,9 +8,12 @@ import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.hardware.IMU;
 import com.qualcomm.robotcore.util.ElapsedTime;
 import com.qualcomm.robotcore.util.Range;
+import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 
+import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.Pose3D;
 import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
 
@@ -22,8 +25,11 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  *
  *   AUTO-AIM:  The Limelight (pipeline 0 = AprilTags) looks for the hive tags of your
  *              alliance. While you drive, the robot turns itself to keep the hive centered
- *              (you keep control of forward/strafe). Push the right stick to take over
- *              turning; let go and it re-aims.
+ *              (you keep control of forward/strafe). When the tag is out of view, it keeps
+ *              turning toward the direction the hive was last seen, using the gyro (IMU),
+ *              and snaps back onto the tag as soon as it sees it again. It never gives
+ *              turning back to the stick while auto-aim is on and a hive has been seen
+ *              (see DRIVER_CAN_OVERRIDE_AIM). Press right bumper to turn auto-aim off.
  *   SHOOTER:   The flywheel RPM is picked from the distance to the hive tag using the
  *              SHOOTER_TABLE below. RT only feeds a game piece once the flywheels are up
  *              to speed.
@@ -34,7 +40,8 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  *
  * CONTROLS (gamepad 1):
  *   Left stick        drive / strafe
- *   Right stick X     turn (overrides auto-aim while pushed)
+ *   Right stick X     turn (only when auto-aim is OFF, or no hive has been seen yet,
+ *                     unless DRIVER_CAN_OVERRIDE_AIM is true)
  *   Right bumper      toggle auto-aim ON / OFF   (starts ON)
  *   Left bumper       toggle shooter spin-up ON / OFF (starts OFF)
  *   Right trigger     SHOOT (feeds when shooter is at speed)
@@ -87,11 +94,24 @@ public class BioBuzzTeleOp extends LinearOpMode {
     // probably NOT zero. Aim the shooter at the hive by hand, read tx, and enter it here.
     private static final double AIM_TARGET_TX_DEG = 0.0;   // TODO
     private static final double TX_SMOOTHING = 0.5;
-    // If the tag drops out, keep turning toward where it was last seen for this long.
-    private static final double LOST_SEARCH_SECONDS = 0.5;
-    private static final double LOST_SEARCH_POWER = 0.15;
-    // Right stick beyond this takes over turning from auto-aim.
+    // We only call the robot "aimed and ready to shoot" if the tag was seen this recently.
+    // (When the tag is out of view the robot aims from gyro memory, which is less exact.)
+    private static final double READY_MAX_AGE_SECONDS = 0.5;
+    // If true, pushing the right stick past AIM_DRIVER_OVERRIDE takes over turning from
+    // auto-aim (the old behavior). False = auto-aim always controls turning while it is on.
+    private static final boolean DRIVER_CAN_OVERRIDE_AIM = false;
     private static final double AIM_DRIVER_OVERRIDE = 0.25;
+
+    // --- IMU (gyro) used to keep aiming when the hive tag is out of view ---
+    private static final String IMU_NAME = "imu";
+    // TODO: how the Control Hub is mounted on the robot. Look at the hub's logo and USB
+    // port and set these to the directions they face. Wrong values make the gyro memory
+    // aim the wrong way. Check with the telemetry "Gyro yaw": turning the robot LEFT
+    // (counterclockwise) must make it go UP.
+    private static final RevHubOrientationOnRobot.LogoFacingDirection IMU_LOGO_DIRECTION =
+            RevHubOrientationOnRobot.LogoFacingDirection.UP;
+    private static final RevHubOrientationOnRobot.UsbFacingDirection IMU_USB_DIRECTION =
+            RevHubOrientationOnRobot.UsbFacingDirection.FORWARD;
 
     // --- Shooter ---
     private static final String INNER_SHOOTER_NAME = "motor2B";
@@ -135,6 +155,7 @@ public class BioBuzzTeleOp extends LinearOpMode {
     private DcMotor leftFront, rightFront, leftRear, rightRear;
     private DcMotorEx innerShooter, outerShooter;
     private DcMotor innerIntake, outerIntake;
+    private IMU imu;
 
     private final LimelightTeleOp.LimelightStream stream =
             new LimelightTeleOp.LimelightStream(LIMELIGHT_HOST, LIMELIGHT_STREAM_PORT);
@@ -153,6 +174,10 @@ public class BioBuzzTeleOp extends LinearOpMode {
     private boolean haveHive = false;
     private double smoothedTx = 0.0;
     private double lastError = 0.0;
+    // Direction of the hive in the gyro's frame (degrees), remembered from the last time
+    // the tag was seen. Used to keep aiming when the tag is out of view.
+    private boolean haveHiveYaw = false;
+    private double hiveYawDeg = 0.0;
     private boolean haveDistance = false;
     private double smoothedDistance = 0.0;
     private double targetRpm = DEFAULT_SHOOTER_RPM;
@@ -161,6 +186,7 @@ public class BioBuzzTeleOp extends LinearOpMode {
     public void runOpMode() {
         initDrive();
         initMechanisms();
+        initImu();
 
         limelight = hardwareMap.get(Limelight3A.class, LIMELIGHT_NAME);
         limelight.setPollRateHz(100);
@@ -196,20 +222,33 @@ public class BioBuzzTeleOp extends LinearOpMode {
             double forward = -gamepad1.left_stick_y;
             double strafe = gamepad1.left_stick_x * 1.1;
             double turn = gamepad1.right_stick_x;
-            boolean driverTurning = Math.abs(gamepad1.right_stick_x) > AIM_DRIVER_OVERRIDE;
+            boolean driverTurning = DRIVER_CAN_OVERRIDE_AIM
+                    && Math.abs(gamepad1.right_stick_x) > AIM_DRIVER_OVERRIDE;
+
+            double yaw = imuYawDeg();   // degrees, counterclockwise = increasing
 
             if (hive != null) {
                 updateHiveTracking(hive);
+                // Remember which way the hive is, in the gyro's frame. A tag to the RIGHT
+                // (positive error) means the hive is clockwise of where we face, so its
+                // yaw is smaller than ours.
+                hiveYawDeg = wrapDeg(yaw - lastError);
+                haveHiveYaw = true;
             }
 
-            boolean aiming = false;
+            // Aim mode: "TAG" = steering on the live tag, "GYRO" = tag out of view so we
+            // steer toward the remembered direction, "none" = nothing to aim at (yet).
+            String aimMode = "none";
             if (aimEnabled && !driverTurning && pipeline == APRILTAG_PIPELINE) {
                 if (hive != null) {
                     turn = aimTurnPower(lastError);
-                    aiming = true;
-                } else if (haveHive && sinceSeen.seconds() < LOST_SEARCH_SECONDS) {
-                    turn = AIM_DIRECTION * Math.copySign(LOST_SEARCH_POWER, lastError);
-                    aiming = true;
+                    aimMode = "TAG";
+                } else if (haveHiveYaw) {
+                    // Same sign convention as the tag error: convert the heading error
+                    // (how far we must rotate counterclockwise) into the equivalent tx error.
+                    double gyroError = -wrapDeg(hiveYawDeg - yaw);
+                    turn = aimTurnPower(gyroError);
+                    aimMode = "GYRO";
                 }
             }
             drive(forward, strafe, turn);
@@ -219,7 +258,7 @@ public class BioBuzzTeleOp extends LinearOpMode {
             // ------------------------------------------------------------------------------
             updateShooter();
             boolean atSpeed = shooterAtSpeed();
-            boolean aimed = haveHive && sinceSeen.seconds() < LOST_SEARCH_SECONDS
+            boolean aimed = haveHive && sinceSeen.seconds() < READY_MAX_AGE_SECONDS
                     && Math.abs(lastError) < AIM_TOLERANCE_DEG;
             boolean readyToShoot = shooterEnabled && atSpeed && aimed;
 
@@ -236,8 +275,11 @@ public class BioBuzzTeleOp extends LinearOpMode {
             telemetry.addData("Pipeline", pipeline == APRILTAG_PIPELINE ? "AprilTag" : "Pollen");
             telemetry.addData("Auto-aim", !aimEnabled ? "OFF"
                     : driverTurning ? "paused (driver turning)"
-                    : aiming ? "AIMING" : "no hive tag");
+                    : aimMode.equals("TAG") ? "AIMING (tag in view)"
+                    : aimMode.equals("GYRO") ? "AIMING (tag out of view, using gyro)"
+                    : "no hive seen yet");
             telemetry.addData("Hive tx error", haveHive ? String.format("%.1f deg", lastError) : "-");
+            telemetry.addData("Gyro yaw (left turn = up)", "%.1f deg", yaw);
             telemetry.addData("Hive distance", haveDistance ? String.format("%.2f m", smoothedDistance) : "-");
             telemetry.addData("Shooter", shooterEnabled ? "SPINNING" : "off");
             telemetry.addData("Target RPM", "%.0f", targetRpm);
@@ -306,6 +348,27 @@ public class BioBuzzTeleOp extends LinearOpMode {
                 targetRpm = rpmForDistance(smoothedDistance);
             }
         }
+    }
+
+    // ----------------------------------------------------------------------------------
+    // Gyro helpers (used to keep aiming when the tag is out of view)
+    // ----------------------------------------------------------------------------------
+    private void initImu() {
+        imu = hardwareMap.get(IMU.class, IMU_NAME);
+        imu.initialize(new IMU.Parameters(
+                new RevHubOrientationOnRobot(IMU_LOGO_DIRECTION, IMU_USB_DIRECTION)));
+        imu.resetYaw();
+    }
+
+    private double imuYawDeg() {
+        return imu.getRobotYawPitchRollAngles().getYaw(AngleUnit.DEGREES);
+    }
+
+    /** Wraps an angle in degrees into the range (-180, 180]. */
+    private static double wrapDeg(double deg) {
+        while (deg > 180.0) deg -= 360.0;
+        while (deg <= -180.0) deg += 360.0;
+        return deg;
     }
 
     private double aimTurnPower(double error) {
@@ -400,12 +463,14 @@ public class BioBuzzTeleOp extends LinearOpMode {
             pipeline = APRILTAG_PIPELINE;
             limelight.pipelineSwitch(pipeline);
             haveHive = false;
+            haveHiveYaw = false;
             haveDistance = false;
         }
         if (POLLEN_ENABLED && gamepad1.dpad_right && pipeline != POLLEN_PIPELINE) {
             pipeline = POLLEN_PIPELINE;
             limelight.pipelineSwitch(pipeline);
             haveHive = false;
+            haveHiveYaw = false;
             haveDistance = false;
         }
     }
