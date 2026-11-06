@@ -9,6 +9,7 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.IMU;
+import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.util.ElapsedTime;
 import com.qualcomm.robotcore.util.Range;
 
@@ -54,10 +55,10 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  * HIVE TAGS:  BLUE = IDs 38-45,  RED = IDs 30-37 (both sides of each hive).
  *
  * BEFORE THIS WILL AIM ON THE ROBOT:
- *   - START WITH THE TURRET POINTING STRAIGHT AHEAD. The turret's encoder is zeroed at
- *     init, so wherever it is then becomes "straight ahead".
- *   - Fill in every "TODO" in the TURRET section: the config name, TURRET_TICKS_PER_REV,
- *     the limits, the motor direction, and where the camera is mounted.
+ *   - START WITH THE TURRET POINTING STRAIGHT AHEAD. The Axon servos have no feedback
+ *     here, so the code assumes the turret starts straight ahead at init.
+ *   - Fill in every "TODO" in the TURRET section: TURRET_GEAR_RATIO, SERVO_RANGE_DEG,
+ *     the limits, the direction, and where the camera is mounted.
  *   - Shooter motors (motor2B, motor3B) need their encoders plugged in, because the
  *     flywheel runs on velocity control.
  * ======================================================================================
@@ -105,21 +106,29 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
 
     // --- Turret (rotates the shooter side to side) ---
     // Angles are measured in degrees, clockwise (to the right) from straight ahead.
-    // The turret must point straight ahead when you press INIT: that becomes zero.
-    private static final String TURRET_NAME = "turret";    // TODO: its Robot Configuration name
-    // TODO: flip this if a positive turret angle moves the shooter to the LEFT. (It
-    // reverses both the motor and its encoder, so you never need a second sign.)
-    private static final DcMotorSimple.Direction TURRET_MOTOR_DIR = DcMotorSimple.Direction.FORWARD;
-    // TODO: encoder ticks for ONE FULL ROTATION of the turret (motor ticks per rev x the
-    // gear ratio from the motor to the turret). 1000 is a placeholder.
-    private static final double TURRET_TICKS_PER_REV = 1000.0;
-    // TODO: how far the turret may turn each way, so it never winds up its wires or hits a
-    // stop. Keep these inside +-180.
+    // The turret must point straight ahead when you press INIT: that is angle zero.
+    // The turret is turned by two Axon Max servos in POSITIONAL mode (no feedback wire is
+    // needed). The right one is plugged in first; the left is optional and is skipped if it
+    // isn't in the Robot Configuration yet.
+    private static final String TURRET_SERVO_RIGHT_NAME = "servo5B";
+    private static final String TURRET_SERVO_LEFT_NAME = "servo0B";
+    // TODO: flip if a positive angle moves the shooter to the LEFT. This flips both servos.
+    private static final boolean TURRET_REVERSED = false;
+    // The two servos sit on opposite sides of the ring, so one usually needs reversing to
+    // turn the same way. TODO: flip this if the two fight each other once both are wired.
+    private static final boolean LEFT_SERVO_OPPOSITE = true;
+    // TODO: gear ratio = turret ring teeth / servo gear teeth. The servo turns this many
+    // degrees for every 1 degree of turret. 1.0 is a placeholder.
+    private static final double TURRET_GEAR_RATIO = 1.0;
+    // TODO: the servo's full travel in degrees for setPosition 0 -> 1. Check Axon Studio.
+    private static final double SERVO_RANGE_DEG = 355.0;
+    // The servos have no feedback, so we assume the turret moves at this speed to estimate
+    // its angle. TODO: time a real sweep and update. Lower = more cautious about "aimed".
+    private static final double TURRET_SPEED_DEG_PER_SEC = 180.0;
+    // TODO: how far the turret may turn each way, so it never hits a stop or winds wires.
+    // Keep this inside what the servo's travel allows after the gear ratio.
     private static final double TURRET_MIN_DEG = -90.0;
     private static final double TURRET_MAX_DEG = 90.0;
-    // Motor power while moving to the target. Raise for a faster turret, lower if it
-    // overshoots and wobbles.
-    private static final double TURRET_POWER = 0.6;
     // "Aimed" means the turret is within this many degrees of where it should point.
     private static final double TURRET_AIM_TOLERANCE_DEG = 2.0;
     // TODO: true if the Limelight is bolted to the turret (it turns with the shooter).
@@ -186,7 +195,9 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private DcMotor leftFront, rightFront, leftRear, rightRear;
     private DcMotorEx innerShooter, outerShooter;
     private DcMotor innerIntake, outerIntake;
-    private DcMotorEx turret;      // null if it isn't in the Robot Configuration
+    private Servo turretRight, turretLeft;   // right is required; left is optional
+    private final ElapsedTime turretClock = new ElapsedTime();
+    private double turretAngleEstimate = 0.0;   // where we believe the turret points (deg)
     private IMU imu;
 
     private final LimelightTeleOp.LimelightStream stream =
@@ -235,9 +246,9 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
         // hive tags. Check this line shows the alliance you expect, then press PLAY.
         while (opModeInInit()) {
             telemetry.addData("Alliance", redAlliance ? "RED (tags 30-37)" : "BLUE (tags 38-45)");
-            telemetry.addData("Turret", turret != null
+            telemetry.addData("Turret", turretFound()
                     ? "found - make sure it points straight ahead"
-                    : "NOT FOUND (check TURRET_NAME and the Robot Configuration)");
+                    : "NOT FOUND (check servo5B / servo0B in the Robot Configuration)");
             telemetry.addLine("Press PLAY when ready");
             telemetry.update();
         }
@@ -305,7 +316,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
             boolean atSpeed = shooterAtSpeed(spinning);
 
             double turretError = Math.abs(turretTargetDeg - turretAngle);
-            boolean aimed = aimEnabled && turret != null && haveHive
+            boolean aimed = aimEnabled && turretFound() && haveHive
                     && sinceSeen.seconds() < READY_MAX_AGE_SECONDS
                     && turretError < TURRET_AIM_TOLERANCE_DEG
                     && (!CAMERA_ON_TURRET || Math.abs(lastError) < AIM_TOLERANCE_DEG);
@@ -327,7 +338,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
                     : aimMode.equals("TRACKING") ? "TRACKING (tag in view)"
                     : aimMode.equals("HOLDING") ? "HOLDING (tag out of view)"
                     : "no hive seen yet");
-            if (turret == null) {
+            if (!turretFound()) {
                 telemetry.addLine("TURRET NOT FOUND - auto-shoot can't fire, use A to shoot");
             } else {
                 telemetry.addData("Turret angle / target", "%.1f / %.1f deg", turretAngle, turretTargetDeg);
@@ -358,7 +369,6 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
         setShooterRpm(0);
         innerIntake.setPower(0);
         outerIntake.setPower(0);
-        if (turret != null) turret.setPower(0);
         stream.stop();
         CameraStreamServer.getInstance().setSource(null);
         limelight.stop();
@@ -435,29 +445,42 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     // 4. TURRET
     // ----------------------------------------------------------------------------------
     private void initTurret() {
-        // tryGet returns null instead of crashing, so a wrong name only disables aiming.
-        turret = hardwareMap.tryGet(DcMotorEx.class, TURRET_NAME);
-        if (turret == null) return;
-        turret.setDirection(TURRET_MOTOR_DIR);
-        turret.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        turret.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);   // straight ahead = 0
-        turret.setTargetPosition(0);
-        turret.setMode(DcMotor.RunMode.RUN_TO_POSITION);
-        turret.setPower(0.0);
+        // tryGet returns null instead of crashing, so a missing servo only disables aiming.
+        turretRight = hardwareMap.tryGet(Servo.class, TURRET_SERVO_RIGHT_NAME);
+        turretLeft = hardwareMap.tryGet(Servo.class, TURRET_SERVO_LEFT_NAME);
+        turretAngleEstimate = 0.0;   // we assume it starts straight ahead
+        turretClock.reset();
+        setServoAngle(0.0);
     }
 
-    /** Current turret angle in degrees, clockwise from straight ahead (0 if no turret). */
+    /** Which turret servo(s) were found. */
+    private boolean turretFound() {
+        return turretRight != null || turretLeft != null;
+    }
+
+    /** Estimated turret angle in degrees, clockwise from straight ahead (0 if no turret). */
     private double turretAngleDeg() {
-        if (turret == null) return 0.0;
-        return turret.getCurrentPosition() * 360.0 / TURRET_TICKS_PER_REV;
+        return turretFound() ? turretAngleEstimate : 0.0;
     }
 
-    /** Tells the turret motor to go to (and hold) an angle, using its built-in position control. */
+    /** Moves the estimate toward the target at TURRET_SPEED_DEG_PER_SEC and commands the servos. */
     private void driveTurret(double targetDeg) {
-        if (turret == null) return;
-        turret.setTargetPosition((int) Math.round(targetDeg * TURRET_TICKS_PER_REV / 360.0));
-        turret.setMode(DcMotor.RunMode.RUN_TO_POSITION);
-        turret.setPower(TURRET_POWER);
+        double dt = turretClock.seconds();
+        turretClock.reset();
+        double maxStep = TURRET_SPEED_DEG_PER_SEC * dt;
+        double delta = Range.clip(targetDeg - turretAngleEstimate, -maxStep, maxStep);
+        turretAngleEstimate += delta;
+        setServoAngle(turretAngleEstimate);
+    }
+
+    private void setServoAngle(double turretDeg) {
+        double sign = TURRET_REVERSED ? -1.0 : 1.0;
+        double servoDeg = sign * turretDeg * TURRET_GEAR_RATIO;
+        double pos = Range.clip(0.5 + servoDeg / SERVO_RANGE_DEG, 0.0, 1.0);
+        if (turretRight != null) turretRight.setPosition(pos);
+        if (turretLeft != null) {
+            turretLeft.setPosition(LEFT_SERVO_OPPOSITE ? 1.0 - pos : pos);
+        }
     }
 
     // ----------------------------------------------------------------------------------
