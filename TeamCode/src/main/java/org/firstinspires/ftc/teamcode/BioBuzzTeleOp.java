@@ -112,6 +112,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     // isn't in the Robot Configuration yet.
     private static final String TURRET_SERVO_RIGHT_NAME = "servo5B";
     private static final String TURRET_SERVO_LEFT_NAME = "servo0B";
+    // The left servo is not plugged in yet, so it stays OFF. Set this to true once it's wired.
+    private static final boolean USE_LEFT_TURRET_SERVO = false;
     // TODO: flip if a positive angle moves the shooter to the LEFT. This flips both servos.
     private static final boolean TURRET_REVERSED = false;
     // The two servos sit on opposite sides of the ring, so one usually needs reversing to
@@ -248,7 +250,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
             telemetry.addData("Alliance", redAlliance ? "RED (tags 30-37)" : "BLUE (tags 38-45)");
             telemetry.addData("Turret", turretFound()
                     ? "found - make sure it points straight ahead"
-                    : "NOT FOUND (check servo5B / servo0B in the Robot Configuration)");
+                    : "NOT FOUND (check servo5B in the Robot Configuration)");
             telemetry.addLine("Press PLAY when ready");
             telemetry.update();
         }
@@ -447,7 +449,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private void initTurret() {
         // tryGet returns null instead of crashing, so a missing servo only disables aiming.
         turretRight = hardwareMap.tryGet(Servo.class, TURRET_SERVO_RIGHT_NAME);
-        turretLeft = hardwareMap.tryGet(Servo.class, TURRET_SERVO_LEFT_NAME);
+        turretLeft = USE_LEFT_TURRET_SERVO
+                ? hardwareMap.tryGet(Servo.class, TURRET_SERVO_LEFT_NAME) : null;
         turretAngleEstimate = 0.0;   // we assume it starts straight ahead
         turretClock.reset();
         setServoAngle(0.0);
