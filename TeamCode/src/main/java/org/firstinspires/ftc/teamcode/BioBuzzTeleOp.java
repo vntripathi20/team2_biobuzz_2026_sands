@@ -3,6 +3,7 @@ package org.firstinspires.ftc.teamcode;
 import com.qualcomm.hardware.limelightvision.LLResult;
 import com.qualcomm.hardware.limelightvision.LLResultTypes;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
+import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -10,7 +11,6 @@ import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.IMU;
 import com.qualcomm.robotcore.util.ElapsedTime;
 import com.qualcomm.robotcore.util.Range;
-import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.Pose3D;
@@ -20,20 +20,17 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  * ======================================================================================
  *                       BIOBUZZ TELEOP (Sense and Sound Robotics)
  * ======================================================================================
- * Mecanum drive + intake + shooter that keeps itself pointed at the HIVE.
+ * Mecanum drive + intake + a shooter TURRET that keeps itself pointed at the HIVE.
  *
- *   AUTO-AIM:  The Limelight (pipeline 0 = AprilTags) looks for the hive tags of your
- *              alliance. While you drive, the robot turns itself to keep the hive centered
- *              (you keep control of forward/strafe). When the tag is out of view, it keeps
- *              turning toward the direction the hive was last seen, using the gyro (IMU),
- *              and snaps back onto the tag as soon as it sees it again. If the tag is still
- *              missing after SCAN_AFTER_LOST_SECONDS, it SCANS: spins slowly (toward the side
- *              the tag was last seen on) until the camera finds it. While auto-aim is on it
- *              keeps control of turning (see DRIVER_CAN_OVERRIDE_AIM). Press right bumper to
- *              turn auto-aim off and get the stick back.
+ *   AIMING:    The Limelight (pipeline 0 = AprilTags) finds the hive tags of your alliance.
+ *              Only the TURRET moves to point the shooter at the hive. The robot body
+ *              NEVER turns by itself: you always steer with the right stick.
+ *              If the tag leaves view, the turret keeps pointing at the direction the
+ *              hive was last seen, and the gyro (IMU) corrects for the robot turning
+ *              (see TURRET_USE_GYRO_HOLD).
  *   SHOOTER:   The flywheel RPM is picked from the distance to the hive tag using the
- *              SHOOTER_TABLE below. RT only feeds a game piece once the flywheels are up
- *              to speed.
+ *              SHOOTER_TABLE below. The feed only runs once the turret is aimed and the
+ *              flywheels are up to speed.
  *   INTAKE:    Two stages. Outer = motor1B (picks pollen off the floor), inner = motor0B
  *              (moves it toward the shooter).
  *
@@ -42,26 +39,27 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  *
  * CONTROLS (gamepad 1):
  *   Left stick        drive / strafe
- *   Right stick X     turn (only works when auto-aim is OFF, unless
- *                     DRIVER_CAN_OVERRIDE_AIM is true)
- *   Right bumper      toggle auto-aim ON / OFF   (starts ON)
+ *   Right stick X     turn the robot (always yours)
+ *   Right bumper      toggle turret auto-aim ON / OFF   (starts ON; OFF = turret holds)
  *   Left bumper       toggle shooter spin-up ON / OFF (starts OFF)
  *   Right trigger     AUTO-SHOOT: hold it. Spins up the shooter, then feeds once the
- *                     robot is aimed at the hive AND the flywheels are at speed
+ *                     turret is aimed at the hive AND the flywheels are at speed
  *   A                 MANUAL shoot: hold it. Feeds once the flywheels are at speed, with
- *                     no aim check (backup if the camera isn't working)
+ *                     no aim check (backup if the camera or turret isn't working)
  *   Left trigger      INTAKE (outer + inner)
  *   B                 reverse intake (spit out jams)
  *   D-pad left        AprilTag pipeline (aiming)
- *   D-pad right       Pollen pipeline (see what the model detects; auto-aim pauses).
- *                     Disabled until POLLEN_ENABLED is set to true.
+ *   D-pad right       Pollen pipeline. Disabled until POLLEN_ENABLED is set to true.
  *
  * HIVE TAGS:  BLUE = IDs 38-45,  RED = IDs 30-37 (both sides of each hive).
  *
- * BEFORE THIS WILL RUN ON THE ROBOT:
+ * BEFORE THIS WILL AIM ON THE ROBOT:
+ *   - START WITH THE TURRET POINTING STRAIGHT AHEAD. The turret's encoder is zeroed at
+ *     init, so wherever it is then becomes "straight ahead".
+ *   - Fill in every "TODO" in the TURRET section: the config name, TURRET_TICKS_PER_REV,
+ *     the limits, the motor direction, and where the camera is mounted.
  *   - Shooter motors (motor2B, motor3B) need their encoders plugged in, because the
  *     flywheel runs on velocity control.
- *   - Check SHOOTER_TICKS_PER_REV, the motor directions, and every "TODO" number below.
  * ======================================================================================
  */
 public abstract class BioBuzzTeleOp extends LinearOpMode {
@@ -92,38 +90,53 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final int RED_HIVE_MIN_ID = 30;
     private static final int RED_HIVE_MAX_ID = 37;
 
-    // --- Auto-aim (same convention as LimelightTeleOp) ---
-    // AIM_DIRECTION: set to 1.0 if the robot turns toward the hive, -1.0 if it turns away.
-    private static final double AIM_DIRECTION = -1.0;
-    private static final double AIM_KP = 0.02;
-    private static final double AIM_MIN_POWER = 0.05;
-    private static final double AIM_MAX_POWER = 0.5;
-    private static final double AIM_TOLERANCE_DEG = 1.5;
-    // The tx you want to hold. The shooter is not mounted where the camera is, so this is
-    // probably NOT zero. Aim the shooter at the hive by hand, read tx, and enter it here.
+    // --- Camera / tag tracking ---
+    // The tx you see when the shooter is exactly on target, for a camera mounted ON THE
+    // TURRET (see CAMERA_ON_TURRET). It isn't zero if the camera isn't lined up with the
+    // shooter. Aim the shooter at the hive by hand, read tx, and enter it. Leave it 0 for a
+    // camera mounted on the robot body and use CAMERA_YAW_OFFSET_DEG instead.
     private static final double AIM_TARGET_TX_DEG = 0.0;   // TODO
     private static final double TX_SMOOTHING = 0.5;
-    // We only call the robot "aimed and ready to shoot" if the tag was seen this recently.
-    // (When the tag is out of view the robot aims from gyro memory, which is less exact.)
+    // For a camera on the turret: "aimed" means the tag is within this many degrees of the
+    // target tx.
+    private static final double AIM_TOLERANCE_DEG = 1.5;
+    // We only call the shooter "aimed and ready" if the tag was seen this recently.
     private static final double READY_MAX_AGE_SECONDS = 0.5;
-    // --- Scanning: spin to look for the hive when it can't be found ---
-    // If the tag has been out of view this long, stop heading for the remembered direction
-    // and start spinning to search for it.
-    private static final double SCAN_AFTER_LOST_SECONDS = 1.0;
-    // Spin power while scanning. Keep it slow so the camera can catch the tag; raise it
-    // if the robot doesn't move, lower it if the camera blurs or it overshoots the tag.
-    private static final double SCAN_POWER = 0.25;
-    // True = also scan from the very start, before any hive tag has ever been seen.
-    private static final boolean SCAN_WHEN_NEVER_SEEN = true;
-    // If true, pushing the right stick past AIM_DRIVER_OVERRIDE takes over turning from
-    // auto-aim (the old behavior). False = auto-aim always controls turning while it is on.
-    private static final boolean DRIVER_CAN_OVERRIDE_AIM = false;
-    private static final double AIM_DRIVER_OVERRIDE = 0.25;
 
-    // --- IMU (gyro) used to keep aiming when the hive tag is out of view ---
+    // --- Turret (rotates the shooter side to side) ---
+    // Angles are measured in degrees, clockwise (to the right) from straight ahead.
+    // The turret must point straight ahead when you press INIT: that becomes zero.
+    private static final String TURRET_NAME = "turret";    // TODO: its Robot Configuration name
+    // TODO: flip this if a positive turret angle moves the shooter to the LEFT. (It
+    // reverses both the motor and its encoder, so you never need a second sign.)
+    private static final DcMotorSimple.Direction TURRET_MOTOR_DIR = DcMotorSimple.Direction.FORWARD;
+    // TODO: encoder ticks for ONE FULL ROTATION of the turret (motor ticks per rev x the
+    // gear ratio from the motor to the turret). 1000 is a placeholder.
+    private static final double TURRET_TICKS_PER_REV = 1000.0;
+    // TODO: how far the turret may turn each way, so it never winds up its wires or hits a
+    // stop. Keep these inside +-180.
+    private static final double TURRET_MIN_DEG = -90.0;
+    private static final double TURRET_MAX_DEG = 90.0;
+    // Motor power while moving to the target. Raise for a faster turret, lower if it
+    // overshoots and wobbles.
+    private static final double TURRET_POWER = 0.6;
+    // "Aimed" means the turret is within this many degrees of where it should point.
+    private static final double TURRET_AIM_TOLERANCE_DEG = 2.0;
+    // TODO: true if the Limelight is bolted to the turret (it turns with the shooter).
+    // False if it's fixed to the robot body.
+    private static final boolean CAMERA_ON_TURRET = false;
+    // Which way the camera faces compared with the turret's zero ("straight ahead"):
+    // 0 = the same way, 180 = backwards. Positive = camera points to the right.
+    private static final double CAMERA_YAW_OFFSET_DEG = 0.0;   // TODO
+    // True: when the tag is out of view the turret keeps pointing at the hive's last known
+    // direction, correcting with the gyro as the robot turns. False: it just holds the last
+    // turret angle.
+    private static final boolean TURRET_USE_GYRO_HOLD = true;
+
+    // --- IMU (gyro) used to hold the aim when the hive tag is out of view ---
     private static final String IMU_NAME = "imu";
     // TODO: how the Control Hub is mounted on the robot. Look at the hub's logo and USB
-    // port and set these to the directions they face. Wrong values make the gyro memory
+    // port and set these to the directions they face. Wrong values make the gyro hold
     // aim the wrong way. Check with the telemetry "Gyro yaw": turning the robot LEFT
     // (counterclockwise) must make it go UP.
     private static final RevHubOrientationOnRobot.LogoFacingDirection IMU_LOGO_DIRECTION =
@@ -159,8 +172,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final String INNER_INTAKE_NAME = "motor0B";
     private static final String OUTER_INTAKE_NAME = "motor1B";
     // TODO: flip a direction if that stage pushes pollen the wrong way.
-    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
-    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
+    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
+    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
     private static final double INTAKE_POWER = 1.0;
     private static final double FEED_POWER = 1.0;   // inner stage power while shooting
 
@@ -173,6 +186,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private DcMotor leftFront, rightFront, leftRear, rightRear;
     private DcMotorEx innerShooter, outerShooter;
     private DcMotor innerIntake, outerIntake;
+    private DcMotorEx turret;      // null if it isn't in the Robot Configuration
     private IMU imu;
 
     private final LimelightTeleOp.LimelightStream stream =
@@ -193,12 +207,11 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private double smoothedTx = 0.0;
     private double lastError = 0.0;
     // Direction of the hive in the gyro's frame (degrees), remembered from the last time
-    // the tag was seen. Used to keep aiming when the tag is out of view.
+    // the tag was seen. Used to keep the turret on the hive when the tag is out of view.
     private boolean haveHiveYaw = false;
     private double hiveYawDeg = 0.0;
-    // Which way to spin when scanning: +1 = toward the right (clockwise), -1 = left. Set to
-    // the side the tag was last seen on, so the search starts where it most likely went.
-    private double scanSign = 1.0;
+    // Where the turret is being told to point (degrees clockwise from straight ahead).
+    private double turretTargetDeg = 0.0;
     private boolean haveDistance = false;
     private double smoothedDistance = 0.0;
     private double targetRpm = DEFAULT_SHOOTER_RPM;
@@ -207,6 +220,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     public void runOpMode() {
         initDrive();
         initMechanisms();
+        initTurret();
         initImu();
 
         limelight = hardwareMap.get(Limelight3A.class, LIMELIGHT_NAME);
@@ -221,6 +235,9 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
         // hive tags. Check this line shows the alliance you expect, then press PLAY.
         while (opModeInInit()) {
             telemetry.addData("Alliance", redAlliance ? "RED (tags 30-37)" : "BLUE (tags 38-45)");
+            telemetry.addData("Turret", turret != null
+                    ? "found - make sure it points straight ahead"
+                    : "NOT FOUND (check TURRET_NAME and the Robot Configuration)");
             telemetry.addLine("Press PLAY when ready");
             telemetry.update();
         }
@@ -236,64 +253,62 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
                 hive = pickHiveTag(result);
             }
 
-            // ------------------------------------------------------------------------------
-            // DRIVING (+ auto-aim)
-            // ------------------------------------------------------------------------------
-            double forward = -gamepad1.left_stick_y;
-            double strafe = gamepad1.left_stick_x * 1.1;
-            double turn = gamepad1.right_stick_x;
-            boolean driverTurning = DRIVER_CAN_OVERRIDE_AIM
-                    && Math.abs(gamepad1.right_stick_x) > AIM_DRIVER_OVERRIDE;
+            double yaw = imuYawDeg();                // degrees, counterclockwise = increasing
+            double turretAngle = turretAngleDeg();   // degrees, clockwise from straight ahead
 
-            double yaw = imuYawDeg();   // degrees, counterclockwise = increasing
-
+            // ------------------------------------------------------------------------------
+            // HIVE TRACKING
+            // ------------------------------------------------------------------------------
             if (hive != null) {
                 updateHiveTracking(hive);
-                // Remember which way the hive is, in the gyro's frame. A tag to the RIGHT
-                // (positive error) means the hive is clockwise of where we face, so its
-                // yaw is smaller than ours.
-                hiveYawDeg = wrapDeg(yaw - lastError);
+                // Where the hive is, relative to the robot's front, clockwise positive. A
+                // camera on the turret reports the tag relative to the turret, so add the
+                // turret angle to get back to the robot's frame.
+                double bearing = (CAMERA_ON_TURRET ? turretAngle : 0.0)
+                        + CAMERA_YAW_OFFSET_DEG + lastError;
+                // Remember it in the gyro's frame so it survives the robot turning.
+                // (yaw is counterclockwise, bearing is clockwise, hence the minus.)
+                hiveYawDeg = wrapDeg(yaw - bearing);
                 haveHiveYaw = true;
-                scanSign = lastError >= 0 ? 1.0 : -1.0;
             }
 
-            // Aim mode: "TAG" = steering on the live tag, "GYRO" = tag just left view so we
-            // steer toward the remembered direction, "SCAN" = tag still missing so we spin
-            // to look for it, "none" = nothing to aim at.
+            // ------------------------------------------------------------------------------
+            // TURRET: the only thing that aims. The robot body is never turned from here.
+            // ------------------------------------------------------------------------------
             String aimMode = "none";
-            if (aimEnabled && !driverTurning && pipeline == APRILTAG_PIPELINE) {
-                if (hive != null) {
-                    turn = aimTurnPower(lastError);
-                    aimMode = "TAG";
-                } else if (haveHiveYaw && sinceSeen.seconds() < SCAN_AFTER_LOST_SECONDS) {
-                    // Same sign convention as the tag error: convert the heading error
-                    // (how far we must rotate counterclockwise) into the equivalent tx error.
-                    double gyroError = -wrapDeg(hiveYawDeg - yaw);
-                    turn = aimTurnPower(gyroError);
-                    aimMode = "GYRO";
-                } else if (haveHiveYaw || SCAN_WHEN_NEVER_SEEN) {
-                    // Spin toward the side the tag was last seen on. Using AIM_DIRECTION keeps
-                    // "right" meaning the same physical direction as the tag aiming above.
-                    turn = AIM_DIRECTION * scanSign * SCAN_POWER;
-                    aimMode = "SCAN";
+            if (aimEnabled && pipeline == APRILTAG_PIPELINE && haveHiveYaw) {
+                if (hive != null || TURRET_USE_GYRO_HOLD) {
+                    // Hive direction in the robot's frame, from the gyro (or the live tag).
+                    turretTargetDeg = Range.clip(wrapDeg(yaw - hiveYawDeg),
+                            TURRET_MIN_DEG, TURRET_MAX_DEG);
                 }
+                aimMode = hive != null ? "TRACKING" : "HOLDING";
             }
-            drive(forward, strafe, turn);
+            driveTurret(turretTargetDeg);
+
+            // ------------------------------------------------------------------------------
+            // DRIVING - always the driver's sticks
+            // ------------------------------------------------------------------------------
+            drive(-gamepad1.left_stick_y, gamepad1.left_stick_x * 1.1, gamepad1.right_stick_x);
 
             // ------------------------------------------------------------------------------
             // SHOOTER + INTAKE
             // ------------------------------------------------------------------------------
-            // RT = AUTO-SHOOT: spins the shooter up and feeds only once we are aimed at the
-            // hive AND the flywheels are at speed. A = MANUAL shoot: feeds once the flywheels
-            // are at speed, no aim check (a backup if the camera isn't working).
+            // RT = AUTO-SHOOT: spins the shooter up and feeds only once the turret is aimed
+            // at the hive AND the flywheels are at speed. A = MANUAL shoot: feeds once the
+            // flywheels are at speed, no aim check (a backup if the camera isn't working).
             boolean autoShootHeld = gamepad1.right_trigger > TRIGGER_THRESHOLD;
             boolean manualShootHeld = gamepad1.a;
             boolean spinning = shooterEnabled || autoShootHeld || manualShootHeld;
 
             updateShooter(spinning);
             boolean atSpeed = shooterAtSpeed(spinning);
-            boolean aimed = haveHive && sinceSeen.seconds() < READY_MAX_AGE_SECONDS
-                    && Math.abs(lastError) < AIM_TOLERANCE_DEG;
+
+            double turretError = Math.abs(turretTargetDeg - turretAngle);
+            boolean aimed = aimEnabled && turret != null && haveHive
+                    && sinceSeen.seconds() < READY_MAX_AGE_SECONDS
+                    && turretError < TURRET_AIM_TOLERANCE_DEG
+                    && (!CAMERA_ON_TURRET || Math.abs(lastError) < AIM_TOLERANCE_DEG);
             boolean readyToShoot = spinning && atSpeed && aimed;
 
             // Rumble once each time we become ready, so the driver can feel it.
@@ -308,12 +323,15 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
             // ------------------------------------------------------------------------------
             telemetry.addData("Alliance", redAlliance ? "RED" : "BLUE");
             telemetry.addData("Pipeline", pipeline == APRILTAG_PIPELINE ? "AprilTag" : "Pollen");
-            telemetry.addData("Auto-aim", !aimEnabled ? "OFF"
-                    : driverTurning ? "paused (driver turning)"
-                    : aimMode.equals("TAG") ? "AIMING (tag in view)"
-                    : aimMode.equals("GYRO") ? "AIMING (tag out of view, using gyro)"
-                    : aimMode.equals("SCAN") ? "SCANNING for the hive"
-                    : "idle");
+            telemetry.addData("Turret aim", !aimEnabled ? "OFF (holding)"
+                    : aimMode.equals("TRACKING") ? "TRACKING (tag in view)"
+                    : aimMode.equals("HOLDING") ? "HOLDING (tag out of view)"
+                    : "no hive seen yet");
+            if (turret == null) {
+                telemetry.addLine("TURRET NOT FOUND - auto-shoot can't fire, use A to shoot");
+            } else {
+                telemetry.addData("Turret angle / target", "%.1f / %.1f deg", turretAngle, turretTargetDeg);
+            }
             telemetry.addData("Hive tx error", haveHive ? String.format("%.1f deg", lastError) : "-");
             telemetry.addData("Gyro yaw (left turn = up)", "%.1f deg", yaw);
             telemetry.addData("Hive distance", haveDistance ? String.format("%.2f m", smoothedDistance) : "-");
@@ -340,6 +358,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
         setShooterRpm(0);
         innerIntake.setPower(0);
         outerIntake.setPower(0);
+        if (turret != null) turret.setPower(0);
         stream.stop();
         CameraStreamServer.getInstance().setSource(null);
         limelight.stop();
@@ -392,7 +411,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     }
 
     // ----------------------------------------------------------------------------------
-    // Gyro helpers (used to keep aiming when the tag is out of view)
+    // Gyro helpers (used to keep the turret on the hive when the tag is out of view)
     // ----------------------------------------------------------------------------------
     private void initImu() {
         imu = hardwareMap.get(IMU.class, IMU_NAME);
@@ -412,15 +431,37 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
         return deg;
     }
 
-    private double aimTurnPower(double error) {
-        if (Math.abs(error) < AIM_TOLERANCE_DEG) return 0.0;
-        double power = AIM_DIRECTION * AIM_KP * error;
-        if (Math.abs(power) < AIM_MIN_POWER) power = Math.copySign(AIM_MIN_POWER, power);
-        return Range.clip(power, -AIM_MAX_POWER, AIM_MAX_POWER);
+    // ----------------------------------------------------------------------------------
+    // 4. TURRET
+    // ----------------------------------------------------------------------------------
+    private void initTurret() {
+        // tryGet returns null instead of crashing, so a wrong name only disables aiming.
+        turret = hardwareMap.tryGet(DcMotorEx.class, TURRET_NAME);
+        if (turret == null) return;
+        turret.setDirection(TURRET_MOTOR_DIR);
+        turret.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        turret.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);   // straight ahead = 0
+        turret.setTargetPosition(0);
+        turret.setMode(DcMotor.RunMode.RUN_TO_POSITION);
+        turret.setPower(0.0);
+    }
+
+    /** Current turret angle in degrees, clockwise from straight ahead (0 if no turret). */
+    private double turretAngleDeg() {
+        if (turret == null) return 0.0;
+        return turret.getCurrentPosition() * 360.0 / TURRET_TICKS_PER_REV;
+    }
+
+    /** Tells the turret motor to go to (and hold) an angle, using its built-in position control. */
+    private void driveTurret(double targetDeg) {
+        if (turret == null) return;
+        turret.setTargetPosition((int) Math.round(targetDeg * TURRET_TICKS_PER_REV / 360.0));
+        turret.setMode(DcMotor.RunMode.RUN_TO_POSITION);
+        turret.setPower(TURRET_POWER);
     }
 
     // ----------------------------------------------------------------------------------
-    // 4. SHOOTER
+    // 5. SHOOTER
     // ----------------------------------------------------------------------------------
     /** Linear interpolation through SHOOTER_TABLE, clamped at both ends. */
     private double rpmForDistance(double meters) {
@@ -458,7 +499,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     }
 
     // ----------------------------------------------------------------------------------
-    // 5. INTAKE
+    // 6. INTAKE
     // LT = intake both stages. feedNow = the shoot conditions are met (RT auto-shoot or A
     // manual shoot), so the inner stage pushes a piece into the flywheels.
     // B = reverse. Reverse wins, then shoot, then intake.
@@ -491,7 +532,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     }
 
     // ----------------------------------------------------------------------------------
-    // 6. BUTTON HANDLING (act on the press, not while held)
+    // 7. BUTTON HANDLING (act on the press, not while held)
     // ----------------------------------------------------------------------------------
     private void handleToggles() {
         if (gamepad1.right_bumper && !lastRightBumper) aimEnabled = !aimEnabled;
@@ -518,7 +559,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     }
 
     // ----------------------------------------------------------------------------------
-    // 7. HARDWARE SETUP
+    // 8. HARDWARE SETUP
     // ----------------------------------------------------------------------------------
     private void initMechanisms() {
         innerShooter = hardwareMap.get(DcMotorEx.class, INNER_SHOOTER_NAME);
