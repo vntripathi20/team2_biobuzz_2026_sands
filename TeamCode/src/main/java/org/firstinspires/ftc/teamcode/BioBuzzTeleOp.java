@@ -161,6 +161,10 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     // TODO: flywheels usually spin opposite ways. Flip one if a wheel spins backwards.
     private static final DcMotorSimple.Direction INNER_SHOOTER_DIR = DcMotorSimple.Direction.FORWARD;
     private static final DcMotorSimple.Direction OUTER_SHOOTER_DIR = DcMotorSimple.Direction.REVERSE;
+    // If a shooter motor is dead or unplugged, set its flag to false and the other one runs
+    // alone (and "at speed" only checks the working one).
+    private static final boolean USE_INNER_SHOOTER = true;
+    private static final boolean USE_OUTER_SHOOTER = true;
     // Encoder ticks per flywheel revolution (motor CPR x any gear ratio to the wheel).
     // TODO: bare goBILDA 5203 = 28. Look up your exact motor and ratio.
     private static final double SHOOTER_TICKS_PER_REV = 28.0;
@@ -183,8 +187,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final String INNER_INTAKE_NAME = "motor0B";
     private static final String OUTER_INTAKE_NAME = "motor1B";
     // TODO: flip a direction if that stage pushes pollen the wrong way.
-    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
-    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
+    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
+    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
     private static final double INTAKE_POWER = 1.0;
     private static final double FEED_POWER = 1.0;   // inner stage power while shooting
 
@@ -510,8 +514,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
 
     private void setShooterRpm(double rpm) {
         double ticksPerSecond = rpm * SHOOTER_TICKS_PER_REV / 60.0;
-        innerShooter.setVelocity(ticksPerSecond);
-        outerShooter.setVelocity(ticksPerSecond);
+        innerShooter.setVelocity(USE_INNER_SHOOTER ? ticksPerSecond : 0.0);
+        outerShooter.setVelocity(USE_OUTER_SHOOTER ? ticksPerSecond : 0.0);
     }
 
     private double rpmOf(DcMotorEx motor) {
@@ -520,8 +524,11 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
 
     private boolean shooterAtSpeed(boolean spinning) {
         if (!spinning) return false;
-        return Math.abs(rpmOf(innerShooter) - targetRpm) < SHOOTER_RPM_TOLERANCE
-                && Math.abs(rpmOf(outerShooter) - targetRpm) < SHOOTER_RPM_TOLERANCE;
+        boolean innerOk = !USE_INNER_SHOOTER
+                || Math.abs(rpmOf(innerShooter) - targetRpm) < SHOOTER_RPM_TOLERANCE;
+        boolean outerOk = !USE_OUTER_SHOOTER
+                || Math.abs(rpmOf(outerShooter) - targetRpm) < SHOOTER_RPM_TOLERANCE;
+        return innerOk && outerOk;
     }
 
     // ----------------------------------------------------------------------------------
