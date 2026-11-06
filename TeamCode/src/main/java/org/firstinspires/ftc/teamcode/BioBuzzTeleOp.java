@@ -159,8 +159,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final String INNER_SHOOTER_NAME = "motor2B";
     private static final String OUTER_SHOOTER_NAME = "motor3B";
     // TODO: flywheels usually spin opposite ways. Flip one if a wheel spins backwards.
-    private static final DcMotorSimple.Direction INNER_SHOOTER_DIR = DcMotorSimple.Direction.FORWARD;
-    private static final DcMotorSimple.Direction OUTER_SHOOTER_DIR = DcMotorSimple.Direction.REVERSE;
+    private static final DcMotorSimple.Direction INNER_SHOOTER_DIR = DcMotorSimple.Direction.REVERSE;
+    private static final DcMotorSimple.Direction OUTER_SHOOTER_DIR = DcMotorSimple.Direction.FORWARD;
     // Encoder ticks per flywheel revolution (motor CPR x any gear ratio to the wheel).
     // TODO: bare goBILDA 5203 = 28. Look up your exact motor and ratio.
     private static final double SHOOTER_TICKS_PER_REV = 28.0;
@@ -183,8 +183,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final String INNER_INTAKE_NAME = "motor0B";
     private static final String OUTER_INTAKE_NAME = "motor1B";
     // TODO: flip a direction if that stage pushes pollen the wrong way.
-    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
-    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
+    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
+    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
     private static final double INTAKE_POWER = 1.0;
     private static final double FEED_POWER = 1.0;   // inner stage power while shooting
 
