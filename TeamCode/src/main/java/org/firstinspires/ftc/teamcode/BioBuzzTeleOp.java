@@ -4,7 +4,6 @@ import com.qualcomm.hardware.limelightvision.LLResult;
 import com.qualcomm.hardware.limelightvision.LLResultTypes;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
@@ -38,7 +37,8 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  *   INTAKE:    Two stages. Outer = motor1B (picks pollen off the floor), inner = motor0B
  *              (moves it toward the shooter).
  *
- * INIT (gamepad 1):  X = BLUE alliance,  B = RED alliance
+ * RUN "BioBuzz TeleOp BLUE" or "BioBuzz TeleOp RED" (BioBuzzTeleOpBlue / BioBuzzTeleOpRed).
+ * This class holds all the logic; those two just pick the alliance.
  *
  * CONTROLS (gamepad 1):
  *   Left stick        drive / strafe
@@ -64,8 +64,12 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  *   - Check SHOOTER_TICKS_PER_REV, the motor directions, and every "TODO" number below.
  * ======================================================================================
  */
-@TeleOp(name = "BioBuzz TeleOp", group = "TeleOp")
-public class BioBuzzTeleOp extends LinearOpMode {
+public abstract class BioBuzzTeleOp extends LinearOpMode {
+
+    /** Called by BioBuzzTeleOpBlue / BioBuzzTeleOpRed, which are the two OpModes you run. */
+    protected BioBuzzTeleOp(boolean redAlliance) {
+        this.redAlliance = redAlliance;
+    }
 
     // ----------------------------------------------------------------------------------
     // 1. SETTINGS - tune these on your robot.
@@ -174,7 +178,7 @@ public class BioBuzzTeleOp extends LinearOpMode {
     private final LimelightTeleOp.LimelightStream stream =
             new LimelightTeleOp.LimelightStream(LIMELIGHT_HOST, LIMELIGHT_STREAM_PORT);
 
-    private boolean redAlliance = false;
+    private final boolean redAlliance;
     private int pipeline = APRILTAG_PIPELINE;
 
     private boolean aimEnabled = true;
@@ -213,12 +217,11 @@ public class BioBuzzTeleOp extends LinearOpMode {
         stream.start();
         CameraStreamServer.getInstance().setSource(stream);
 
-        // INIT: pick the alliance so we only aim at OUR hive tags.
+        // INIT: the alliance is fixed by which OpMode you picked, so we only aim at OUR
+        // hive tags. Check this line shows the alliance you expect, then press PLAY.
         while (opModeInInit()) {
-            if (gamepad1.x) redAlliance = false;
-            if (gamepad1.b) redAlliance = true;
-            telemetry.addLine("Press X for BLUE, B for RED, then PLAY");
             telemetry.addData("Alliance", redAlliance ? "RED (tags 30-37)" : "BLUE (tags 38-45)");
+            telemetry.addLine("Press PLAY when ready");
             telemetry.update();
         }
         if (isStopRequested()) return;
