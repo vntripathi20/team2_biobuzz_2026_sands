@@ -3,9 +3,12 @@ package org.firstinspires.ftc.teamcode.pedro;
 import com.pedropathing.algorithm.Algorithm;
 import com.pedropathing.algorithm.Foresight;
 import com.pedropathing.algorithm.ForesightConfig;
+import com.pedropathing.controllers.Controller;
 import com.pedropathing.drivetrain.Drivetrain;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.localization.Localizer;
+import com.pedropathing.math.Matrix;
+import com.pedropathing.math.Vector2D;
 import com.pedropathing.revhub.drivetrains.Mecanum;
 import com.pedropathing.revhub.drivetrains.MecanumConfig;
 import com.pedropathing.revhub.localizers.PinpointConfig;
@@ -52,19 +55,22 @@ public class Constants {
         c.frontRightDirection.set(DcMotorSimple.Direction.FORWARD);
         c.backLeftDirection.set(DcMotorSimple.Direction.REVERSE);
         c.backRightDirection.set(DcMotorSimple.Direction.FORWARD);
+        c.manualBrakeMode.set(true);
     });
 
     // ----------------------------------------------------------------------------------
     // 2. LOCALIZER  ->  run "Pinpoint Tuner", then paste its code here.
     // This assumes a goBILDA Pinpoint odometry computer. If you use something else
     // (OTOS, two/three dead wheels, OctoQuad), see the other tuners in pedro/procedures.
-    // TODO: the offsets and directions below are placeholders until you run the tuner.
+    // Values copied from the team repo's prior localization AutoTune.
     // ----------------------------------------------------------------------------------
     public static PinpointConfig localizerConfig = new PinpointConfig(c -> {
-        c.name.set("pinpoint");
+        // The past-year config named the odometry computer "odo". It MUST match the name in
+        // the Robot Configuration exactly (change this if yours says "pinpoint").
+        c.name.set("odo");
         c.podType.set(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
-        c.xPodOffset.set(0.0);
-        c.yPodOffset.set(0.0);
+        c.xPodOffset.set(0.77558457382082);
+        c.yPodOffset.set(-0.6094160230140987);
         c.xPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);
         c.yPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);
         c.globalDistanceUnit.set(DistanceUnit.INCH);
@@ -73,11 +79,33 @@ public class Constants {
 
     // ----------------------------------------------------------------------------------
     // 3. FORESIGHT  ->  run "Foresight Tuner", then paste its code here.
-    // The robot CANNOT follow paths until this is filled in. These numbers depend on
-    // your robot's weight, motors and wheels, so they must come from the tuner.
     // ----------------------------------------------------------------------------------
     public static ForesightConfig foresightConfig = new ForesightConfig(c -> {
-        // TODO: paste the Foresight Tuner output here.
+        // Values copied from the team repo's prior Pedro AutoTune. Re-run the Foresight
+        // Tuner if paths overshoot or wobble on this robot.
+        Controller primaryForward = Controller.proportional(0.2700634096035219);
+        Controller secondaryForward = Controller.proportional(0.09978121362129358);
+        Controller primaryStrafe = Controller.proportional(1.8848664172851113);
+        Controller secondaryStrafe = Controller.proportional(0.6964077766286013);
+
+        c.forwardTranslational.set(Controller.piecewise(secondaryForward)
+                .put(2.5, primaryForward));
+        c.strafeTranslational.set(Controller.piecewise(secondaryStrafe)
+                .put(2.5, primaryStrafe));
+        c.coast.set(Controller.proportionalFeedforward(0.009532781279950622));
+        c.brake.set(Controller.proportionalFeedforward(0.00810286408795803));
+        c.headingFeedback.set(Controller.proportional(6.888986279488746));
+        c.headingBrakeCoefficients.set(Vector2D.cartesian(
+                0.05238218401060805, 0.006571389033228161));
+        c.linearBrakeCoefficients.set(Matrix.diag(0.08167383157663453, 0.11921153780870264));
+        c.quadraticBrakeCoefficients.set(Matrix.diag(0.0013993830534930764, 3.725465152997376E-4));
+        c.maxAchievableForwardVelocity.set(79.94289256354337);
+        c.maxAchievableStrafeVelocity.set(61.782452039412284);
+        c.naturalForwardDeceleration.set(36.08066189407658);
+        c.naturalStrafeDeceleration.set(207.02834921608405);
+        c.maxVelocityConstraint.set(60.0);
+        c.maxAccelerationConstraint.set(35.0);
+        c.maxDecelerationConstraint.set(45.0);
     });
 
     // ----------------------------------------------------------------------------------

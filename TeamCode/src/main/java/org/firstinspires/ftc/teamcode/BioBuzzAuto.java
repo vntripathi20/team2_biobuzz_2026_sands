@@ -1,324 +1,435 @@
 package org.firstinspires.ftc.teamcode;
 
-import static com.pedropathing.api.Paths.curve;
 import static com.pedropathing.api.Paths.line;
+import static com.pedropathing.ivy.pedro.PedroCommands.follow;
 
 import com.pedropathing.api.PoseFactory;
 import com.pedropathing.follower.Follower;
+import com.pedropathing.ivy.Command;
+import com.pedropathing.ivy.Scheduler;
 import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
-import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
-import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.eventloop.opmode.OpMode;
+import com.qualcomm.robotcore.hardware.DcMotor;
+import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.util.ElapsedTime;
+import com.qualcomm.robotcore.util.Range;
 
 import org.firstinspires.ftc.teamcode.pedro.Constants;
 
 /**
  * ======================================================================================
- *                         BIOBUZZ AUTONOMOUS (Sense and Sound Robotics)
+ *                         BIOBUZZ AUTONOMOUS (Pedro Pathing)
  * ======================================================================================
- * Full 30-second autonomous built on Pedro Pathing 3.0:
- *   1. drives to the scoring spot and scores the preload,
- *   2. runs PICKUP_COUNT cycles of: curve to a pickup spot (intake on) -> drive back
- *      -> score,
- *   3. parks. If time is running low it skips remaining cycles and parks right away.
+ * Sequence:  drive to the pollen pickup (intake on) -> collect -> drive to the hive
+ *            shooting spot (flywheels spin up on the way) -> aim the turret at the hive ->
+ *            wait for flywheels -> feed and shoot -> (optional) return to the start.
+ *
+ * RUN "BioBuzz Auto BLUE" or "BioBuzz Auto RED" (BioBuzzAutoBlue / BioBuzzAutoRed). This
+ * class holds all the logic; those two just pick the alliance.
  *
  * INIT CONTROLS (gamepad 1):
- *   X = BLUE alliance       B = RED alliance
- *   D-pad UP = NEAR start   D-pad DOWN = FAR start
+ *   A = toggle the pickup run     Y = toggle returning to the start spot at the end
  *
- * BEFORE THIS WILL RUN ON THE ROBOT:
- *   1. Fill in pedro/Constants.java by running the tuners (Foresight is required).
- *   2. Replace every "TODO" pose below with measured BioBuzz field positions.
- *      Draw them at https://visualizer.pedropathing.com first.
- *   3. Fill in the three mechanism methods at the bottom (scoreElement, startIntake,
- *      stopIntake) with the real hardware code.
+ * START POSITION: against your alliance wall, centered on the field's middle seam
+ * (Y = 72), facing into the field. RED is on the x = 0 side, BLUE on the x = 144 side.
  *
- * All poses are written for the BLUE alliance. RED is mirrored across x = 72.
- * Heading is in DEGREES: 0 = facing +X, 90 = facing +Y, 180 = facing -X.
+ * POSES come from the team's other repo (BioBuzz field measurements). BLUE is RED rotated
+ * 180 degrees around the field center (72, 72), where the hive is.
+ *
+ * THE TURRET is aimed from the robot's position, not the camera: it points at (72, 72)
+ * using the Pedro pose. It assumes the turret's zero is straight ahead and the hive is at
+ * the field center.
+ *
+ * Needs pedro/Constants.java tuned (it is, copied from the team repo) and the hardware
+ * names to match the Robot Configuration (Pinpoint named "odo").
  * ======================================================================================
  */
-@Autonomous(name = "BioBuzz Autonomous", group = "Autonomous")
-public class BioBuzzAuto extends LinearOpMode {
+public abstract class BioBuzzAuto extends OpMode {
 
-    // ----------------------------------------------------------------------------------
-    // 1. TUNABLE SETTINGS
-    // ----------------------------------------------------------------------------------
-    /** Number of pickup -> score cycles after the preload. */
-    private static final int PICKUP_COUNT = 2;
-
-    /** Seconds to wait for the scoring mechanism to finish. */
-    private static final double SCORE_TIME = 1.0;
-
-    /** Seconds to keep the intake running once we reach a pickup spot. */
-    private static final double INTAKE_TIME = 0.75;
-
-    /** Fraction (0-1) of the pickup path at which the intake turns on. */
-    private static final double INTAKE_START_COMPLETION = 0.5;
-
-    /** Speed multiplier on pickup paths so the intake can grab the element. */
-    private static final double PICKUP_SPEED = 0.5;
-
-    /** Auto length in seconds. */
-    private static final double AUTO_LENGTH = 30.0;
-
-    /**
-     * Seconds reserved for the trip to park. If less time than this remains when a cycle
-     * would start, the robot skips ahead and parks instead.
-     */
-    private static final double PARK_RESERVE = 5.0;
-
-    // ----------------------------------------------------------------------------------
-    // 2. STATE MACHINE
-    // ----------------------------------------------------------------------------------
-    private enum State {
-        DRIVE_TO_SCORE,
-        SCORING,
-        DRIVE_TO_PICKUP,
-        INTAKING,
-        DRIVE_BACK_TO_SCORE,
-        DRIVE_TO_PARK,
-        DONE
+    /** Called by BioBuzzAutoBlue / BioBuzzAutoRed, which are the two OpModes you run. */
+    protected BioBuzzAuto(boolean redAlliance) {
+        this.redAlliance = redAlliance;
     }
 
-    private State state = State.DRIVE_TO_SCORE;
-    private final ElapsedTime stateTimer = new ElapsedTime();
+    // ----------------------------------------------------------------------------------
+    // 1. FIELD POSES (inches, degrees). RED values; BLUE is mirrored by rotating 180 deg
+    //    about (72, 72).
+    // ----------------------------------------------------------------------------------
+    private static final double[] RED_START = {9.0, 72.0, 0.0};
+    private static final double[] RED_PICKUP = {24.0, 48.0, 0.0};
+    private static final double[] RED_HIVE_SHOT = {59.25, 18.0, 90.0};
+    private static final double FIELD_CENTER_X = 72.0;
+    private static final double FIELD_CENTER_Y = 72.0;
+
+    // ----------------------------------------------------------------------------------
+    // 2. SETTINGS - tune on the field.
+    // ----------------------------------------------------------------------------------
+    private static final double COLLECT_SECONDS = 1.0;      // pause at the pickup with intake on
+    private static final double INTAKE_POWER = 0.8;
+    private static final double AUTO_SHOOTER_RPM = 3000.0;  // TODO: best RPM from the shot spot
+    private static final double SHOOTER_TICKS_PER_REV = 28.0;   // TODO: match TeleOp
+    private static final double SHOOTER_RPM_TOLERANCE = 100.0;
+    private static final double SPINUP_TIMEOUT_SECONDS = 3.0;
+    private static final double FEED_SECONDS = 3.0;
+    private static final double FEED_POWER = 1.0;
+    private static final boolean FEED_OUTER_TOO = true;
+    private static final double PATH_TIMEOUT_SECONDS = 12.0;   // abort a path that never ends
+    private static final double AUTO_TOTAL_SECONDS = 29.0;     // stop everything before 30 s
+    private static final boolean RETURN_TO_START_DEFAULT = false;  // TODO: park spot unknown
+
+    // --- Turret (Axon Max servos, positional) - keep in sync with BioBuzzTeleOp ---
+    private static final String TURRET_SERVO_RIGHT_NAME = "servo5B";
+    private static final String TURRET_SERVO_LEFT_NAME = "servo0B";
+    private static final boolean USE_LEFT_TURRET_SERVO = false;   // not plugged in yet
+    private static final boolean LEFT_SERVO_OPPOSITE = true;
+    private static final boolean TURRET_REVERSED = false;
+    private static final double TURRET_GEAR_RATIO = 1.0;          // TODO
+    private static final double SERVO_RANGE_DEG = 355.0;          // TODO
+    private static final double TURRET_MIN_DEG = -90.0;
+    private static final double TURRET_MAX_DEG = 90.0;
+    // Adds to the computed angle if the shooter isn't exactly on the turret's zero line.
+    private static final double TURRET_AIM_OFFSET_DEG = 0.0;      // TODO
+    private static final boolean AUTO_AIM_TURRET = true;
+
+    // --- Hardware names and directions (match BioBuzzTeleOp) ---
+    private static final String INNER_SHOOTER_NAME = "motor2B";
+    private static final String OUTER_SHOOTER_NAME = "motor3B";
+    private static final String INNER_INTAKE_NAME = "motor0B";
+    private static final String OUTER_INTAKE_NAME = "motor1B";
+    private static final DcMotorSimple.Direction INNER_SHOOTER_DIR = DcMotorSimple.Direction.REVERSE;
+    private static final DcMotorSimple.Direction OUTER_SHOOTER_DIR = DcMotorSimple.Direction.FORWARD;
+    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
+    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
+
+    // ----------------------------------------------------------------------------------
+    // 3. STATE
+    // ----------------------------------------------------------------------------------
+    private static final int IDLE = 0;
+    private static final int DRIVE_TO_PICKUP = 1;
+    private static final int COLLECT = 2;
+    private static final int DRIVE_TO_HIVE = 3;
+    private static final int SPIN_UP = 4;
+    private static final int FEED = 5;
+    private static final int RETURN_TO_START = 6;
+    private static final int COMPLETE = 7;
+    private static final int ABORTED = 8;
+
+    private final PoseFactory poses = PoseFactory.degrees();
+    private Follower follower;
+    private DcMotorEx innerShooter, outerShooter;
+    private DcMotor innerIntake, outerIntake;
+    private Servo turretRight, turretLeft;
+
+    private Command activePath;
+    private final ElapsedTime phaseTimer = new ElapsedTime();
+    private final ElapsedTime pathTimer = new ElapsedTime();
     private final ElapsedTime autoTimer = new ElapsedTime();
 
-    /** How many pickups have been completed so far. */
-    private int cyclesDone = 0;
-    private boolean intakeRunning = false;
+    private final boolean redAlliance;
+    private boolean runPickup = true;
+    private boolean returnToStart = RETURN_TO_START_DEFAULT;
+    private boolean prevA, prevY;
+    private int stage = IDLE;
+    private String status = "Ready";
 
     // ----------------------------------------------------------------------------------
-    // 3. FIELD / ALLIANCE SELECTION AND PEDRO OBJECTS
+    // 4. OPMODE
     // ----------------------------------------------------------------------------------
-    private Follower follower;
-    private boolean redAlliance = false;
-    private boolean nearStart = true;
-
-    private Pose startPose, scorePose, parkPose, parkControlPoint;
-    private Pose[] pickupPoses, pickupControlPoints;
-
-    private Path scorePreloadPath, parkPath;
-    private Path[] grabPaths, returnPaths;
+    @Override
+    public void init() {
+        Scheduler.reset();
+        initMechanisms();
+        follower = Constants.create(hardwareMap);
+        follower.setPose(startPose());
+        follower.update();
+        setTurretAngle(0.0);   // the turret must physically be straight ahead at INIT
+    }
 
     @Override
-    public void runOpMode() {
-        follower = Constants.create(hardwareMap);
+    public void init_loop() {
+        if (gamepad1.a && !prevA) runPickup = !runPickup;
+        if (gamepad1.y && !prevY) returnToStart = !returnToStart;
+        prevA = gamepad1.a;
+        prevY = gamepad1.y;
 
-        // ------------------------------------------------------------------------------
-        // INIT: choose alliance and start spot, then wait for PLAY.
-        // ------------------------------------------------------------------------------
-        while (opModeInInit()) {
-            if (gamepad1.x) redAlliance = false;
-            if (gamepad1.b) redAlliance = true;
-            if (gamepad1.dpad_up) nearStart = true;
-            if (gamepad1.dpad_down) nearStart = false;
+        follower.setPose(startPose());   // keep the pose tied to the chosen alliance
+        telemetry.addData("Alliance", redAlliance ? "RED" : "BLUE");
+        telemetry.addData("Start", poseText(startPose()));
+        telemetry.addData("Pickup", poseText(pickupPose()));
+        telemetry.addData("Hive shot", poseText(hivePose()));
+        telemetry.addData("Route", "pickup %s, return to start %s",
+                runPickup ? "on" : "skip", returnToStart ? "on" : "off");
+        telemetry.addData("Turret servo", turretRight != null ? "found" : "NOT FOUND (servo5B)");
+        telemetry.addLine("A = pickup on/off | Y = return to start on/off");
+        telemetry.addLine("Against your wall, centered on Y=72, facing in. Turret straight ahead.");
+        telemetry.update();
+    }
 
-            telemetry.addLine("X = BLUE, B = RED | D-pad UP = NEAR, D-pad DOWN = FAR");
-            telemetry.addData("Alliance", redAlliance ? "RED" : "BLUE");
-            telemetry.addData("Start", nearStart ? "NEAR" : "FAR");
-            telemetry.addLine("Robot must be at the start pose before pressing PLAY!");
-            telemetry.update();
-        }
-
-        if (isStopRequested()) return;
-
-        // ------------------------------------------------------------------------------
-        // START: build poses and paths for the chosen setup and begin driving.
-        // ------------------------------------------------------------------------------
-        buildPoses();
-        buildPaths();
-        follower.setPose(startPose);
-
+    @Override
+    public void start() {
+        Scheduler.reset();
+        follower.setPose(startPose());
+        follower.update();
         autoTimer.reset();
-        follower.follow(scorePreloadPath);
-        setState(State.DRIVE_TO_SCORE);
-
-        // ------------------------------------------------------------------------------
-        // MAIN LOOP
-        // ------------------------------------------------------------------------------
-        while (opModeIsActive()) {
-            follower.update();   // ALWAYS call this every loop, or the robot won't move.
-            updateStateMachine();
-
-            Pose pose = follower.pose();
-            telemetry.addData("State", state);
-            telemetry.addData("Cycles done", "%d / %d", cyclesDone, PICKUP_COUNT);
-            telemetry.addData("Time left", "%.1f s", AUTO_LENGTH - autoTimer.seconds());
-            telemetry.addData("X", "%.1f", pose.x());
-            telemetry.addData("Y", "%.1f", pose.y());
-            telemetry.addData("Heading", "%.1f deg", Math.toDegrees(pose.heading()));
-            telemetry.update();
-        }
-
-        // Make sure nothing is left spinning if STOP is pressed mid-intake.
-        stopIntake();
-    }
-
-    // ----------------------------------------------------------------------------------
-    // 4. FIELD POSES
-    // TODO: every number in this method is a placeholder. Measure the real BioBuzz
-    // positions on the field and replace them, then check that the RED mirror matches.
-    // ----------------------------------------------------------------------------------
-    private void buildPoses() {
-        PoseFactory field = PoseFactory.degrees();
-        if (redAlliance) field = field.mirrorX(72);
-
-        if (nearStart) {
-            startPose = field.of(9, 60, 0);     // TODO: NEAR start, against the wall
-            scorePose = field.of(36, 72, 0);    // TODO: NEAR scoring spot
+        if (runPickup) {
+            stage = DRIVE_TO_PICKUP;
+            status = "Driving to pickup";
+            schedulePath(pickupPose());
         } else {
-            startPose = field.of(9, 24, 0);     // TODO: FAR start, against the wall
-            scorePose = field.of(36, 36, 0);    // TODO: FAR scoring spot
-        }
-
-        // Pickup spots, in the order they are visited. Need PICKUP_COUNT entries.
-        pickupPoses = new Pose[] {
-                field.of(28, 36, 90),           // TODO: first pickup
-                field.of(28, 12, 90)            // TODO: second pickup
-        };
-        // Control points pull the curves toward them (their heading is ignored).
-        pickupControlPoints = new Pose[] {
-                field.of(44, 50, 0),            // TODO
-                field.of(44, 30, 0)             // TODO
-        };
-
-        parkControlPoint = field.of(60, 40, 0); // TODO
-        parkPose = field.of(60, 12, 270);       // TODO: parking zone
-    }
-
-    // ----------------------------------------------------------------------------------
-    // 5. PATHS
-    // ----------------------------------------------------------------------------------
-    private void buildPaths() {
-        if (pickupPoses.length < PICKUP_COUNT || pickupControlPoints.length < PICKUP_COUNT) {
-            throw new IllegalStateException(
-                    "PICKUP_COUNT is " + PICKUP_COUNT + " but fewer pickup poses were defined.");
-        }
-
-        scorePreloadPath = line(startPose, scorePose)
-                .linear(startPose, scorePose);
-
-        grabPaths = new Path[PICKUP_COUNT];
-        returnPaths = new Path[PICKUP_COUNT];
-        for (int i = 0; i < PICKUP_COUNT; i++) {
-            // Slower on the way to the pickup so the intake can grab the element.
-            grabPaths[i] = curve(scorePose, pickupControlPoints[i], pickupPoses[i])
-                    .linear(scorePose, pickupPoses[i])
-                    .with(Constants.foresightConfig.maxPathSpeed.at(PICKUP_SPEED));
-
-            returnPaths[i] = curve(pickupPoses[i], pickupControlPoints[i], scorePose)
-                    .linear(pickupPoses[i], scorePose);
-        }
-
-        parkPath = curve(scorePose, parkControlPoint, parkPose)
-                .linear(scorePose, parkPose);
-    }
-
-    // ----------------------------------------------------------------------------------
-    // 6. STATE MACHINE
-    // "!follower.isBusy()" means the robot reached the end of its path and stopped.
-    // ----------------------------------------------------------------------------------
-    private void updateStateMachine() {
-        switch (state) {
-            case DRIVE_TO_SCORE:
-                if (!follower.isBusy()) {
-                    scoreElement();
-                    setState(State.SCORING);
-                }
-                break;
-
-            case SCORING:
-                if (stateTimer.seconds() > SCORE_TIME) {
-                    startNextCycleOrPark();
-                }
-                break;
-
-            case DRIVE_TO_PICKUP:
-                // Turn the intake on partway along the path, while still driving.
-                if (!intakeRunning && follower.completion() > INTAKE_START_COMPLETION) {
-                    startIntake();
-                }
-                if (!follower.isBusy()) {
-                    setState(State.INTAKING);
-                }
-                break;
-
-            case INTAKING:
-                if (stateTimer.seconds() > INTAKE_TIME) {
-                    stopIntake();
-                    follower.follow(returnPaths[cyclesDone]);
-                    setState(State.DRIVE_BACK_TO_SCORE);
-                }
-                break;
-
-            case DRIVE_BACK_TO_SCORE:
-                if (!follower.isBusy()) {
-                    cyclesDone++;
-                    scoreElement();
-                    setState(State.SCORING);
-                }
-                break;
-
-            case DRIVE_TO_PARK:
-                if (!follower.isBusy()) {
-                    setState(State.DONE);
-                }
-                break;
-
-            case DONE:
-                // The follower keeps holding the park pose so we don't get pushed.
-                break;
+            beginHiveTransit();
         }
     }
 
-    /**
-     * Starts the next pickup cycle if there are cycles left AND enough time remains to
-     * finish it and still park. Otherwise heads to the park spot.
-     */
-    private void startNextCycleOrPark() {
-        boolean cyclesLeft = cyclesDone < PICKUP_COUNT;
-        boolean timeLeft = AUTO_LENGTH - autoTimer.seconds() > PARK_RESERVE + cycleEstimate();
-
-        if (cyclesLeft && timeLeft) {
-            follower.follow(grabPaths[cyclesDone]);
-            setState(State.DRIVE_TO_PICKUP);
+    @Override
+    public void loop() {
+        follower.update();
+        Pose pose = follower.pose();
+        if (!finite(pose.x()) || !finite(pose.y()) || !finite(pose.heading())) {
+            abort("LOCALIZER INVALID - stopped (check the Pinpoint)");
         } else {
-            follower.follow(parkPath);
-            setState(State.DRIVE_TO_PARK);
+            Scheduler.execute();
+        }
+        boolean pathRunning = activePath != null && Scheduler.isScheduled(activePath);
+
+        if (isPathStage() && pathRunning && pathTimer.seconds() >= PATH_TIMEOUT_SECONDS) {
+            abort("PATH TIMEOUT - stopped");
+            pathRunning = false;
+        }
+        if (autoTimer.seconds() >= AUTO_TOTAL_SECONDS && stage != COMPLETE && stage != ABORTED) {
+            abort("AUTO TIMEOUT - stopped before the end of auto");
+            pathRunning = false;
+        }
+
+        updateState(pathRunning);
+        applyOutputs();
+
+        telemetry.addData("Alliance / status", "%s / %s", redAlliance ? "RED" : "BLUE", status);
+        telemetry.addData("Stage", stageName());
+        telemetry.addData("Pose", "x %.1f, y %.1f, heading %.1f deg",
+                pose.x(), pose.y(), Math.toDegrees(pose.heading()));
+        telemetry.addData("Elapsed", "%.1f s", autoTimer.seconds());
+        telemetry.addData("Inner / Outer RPM", "%.0f / %.0f", rpmOf(innerShooter), rpmOf(outerShooter));
+        telemetry.addData("Turret aim", "%.1f deg", turretAimDeg(pose));
+        telemetry.update();
+    }
+
+    @Override
+    public void stop() {
+        Scheduler.reset();
+        stopMechanisms();
+        if (follower != null) follower.stop();
+    }
+
+    // ----------------------------------------------------------------------------------
+    // 5. STATE MACHINE
+    // ----------------------------------------------------------------------------------
+    private void updateState(boolean pathRunning) {
+        if (stage == DRIVE_TO_PICKUP && !pathRunning) {
+            activePath = null;
+            stage = COLLECT;
+            phaseTimer.reset();
+            status = "Collecting pollen";
+        } else if (stage == COLLECT && phaseTimer.seconds() >= COLLECT_SECONDS) {
+            beginHiveTransit();
+        } else if (stage == DRIVE_TO_HIVE && !pathRunning) {
+            activePath = null;
+            stage = SPIN_UP;
+            phaseTimer.reset();
+            status = "At the hive: waiting for flywheels";
+        } else if (stage == SPIN_UP
+                && (shooterAtSpeed() || phaseTimer.seconds() >= SPINUP_TIMEOUT_SECONDS)) {
+            stage = FEED;
+            phaseTimer.reset();
+            status = "Feeding and shooting";
+        } else if (stage == FEED && phaseTimer.seconds() >= FEED_SECONDS) {
+            if (returnToStart) {
+                stage = RETURN_TO_START;
+                status = "Returning to start";
+                schedulePath(startPose());
+            } else {
+                complete("Score sequence complete");
+            }
+        } else if (stage == RETURN_TO_START && !pathRunning) {
+            activePath = null;
+            complete("Score and return complete");
         }
     }
 
-    /**
-     * Rough seconds one full pickup cycle takes. TODO: time a real cycle on the robot and
-     * update this number so the "skip to park" check is accurate.
-     */
-    private double cycleEstimate() {
-        return 8.0;
+    private void beginHiveTransit() {
+        stage = DRIVE_TO_HIVE;
+        status = "Driving to the hive spot; flywheels spinning";
+        schedulePath(hivePose());
     }
 
-    private void setState(State newState) {
-        state = newState;
-        stateTimer.reset();
+    /** Sets what the intake, shooter and turret should be doing in the current stage. */
+    private void applyOutputs() {
+        double inner = 0.0;
+        double outer = 0.0;
+        double rpm = 0.0;
+
+        if (stage == DRIVE_TO_PICKUP || stage == COLLECT) {
+            inner = INTAKE_POWER;
+            outer = INTAKE_POWER;
+        } else if (stage == DRIVE_TO_HIVE || stage == SPIN_UP) {
+            rpm = AUTO_SHOOTER_RPM;
+        } else if (stage == FEED) {
+            rpm = AUTO_SHOOTER_RPM;
+            inner = FEED_POWER;
+            outer = FEED_OUTER_TOO ? INTAKE_POWER : 0.0;
+        }
+
+        setShooterRpm(rpm);
+        innerIntake.setPower(inner);
+        outerIntake.setPower(outer);
+        if (AUTO_AIM_TURRET && stage != COMPLETE && stage != ABORTED) {
+            setTurretAngle(turretAimDeg(follower.pose()));
+        }
     }
 
     // ----------------------------------------------------------------------------------
-    // 7. MECHANISMS
-    // TODO: replace these with the robot's real intake / scorer code. They are empty so
-    // this auto runs on any drivetrain without crashing.
+    // 6. PATHS
     // ----------------------------------------------------------------------------------
-    private void scoreElement() {
-        // Example: scorer.setPosition(SCORER_OPEN);
+    private void schedulePath(Pose to) {
+        // Start from the measured pose; the last path may have finished a little short.
+        Pose from = follower.pose();
+        Path path = line(from, to).linear(from, to);
+        activePath = follow(follower, path);
+        pathTimer.reset();
+        Scheduler.schedule(activePath);
     }
 
-    private void startIntake() {
-        intakeRunning = true;
-        // Example: intake.setPower(1.0);
+    private boolean isPathStage() {
+        return stage == DRIVE_TO_PICKUP || stage == DRIVE_TO_HIVE || stage == RETURN_TO_START;
     }
 
-    private void stopIntake() {
-        intakeRunning = false;
-        // Example: intake.setPower(0.0);
+    private Pose startPose() { return fieldPose(RED_START); }
+    private Pose pickupPose() { return fieldPose(RED_PICKUP); }
+    private Pose hivePose() { return fieldPose(RED_HIVE_SHOT); }
+
+    /** RED as given; BLUE is the same point rotated 180 degrees about the field center. */
+    private Pose fieldPose(double[] red) {
+        if (!redAlliance) {
+            return poses.of(2 * FIELD_CENTER_X - red[0], 2 * FIELD_CENTER_Y - red[1], red[2] + 180.0);
+        }
+        return poses.of(red[0], red[1], red[2]);
+    }
+
+    // ----------------------------------------------------------------------------------
+    // 7. TURRET AIM FROM THE ROBOT'S POSE
+    // ----------------------------------------------------------------------------------
+    /** Turret angle (degrees clockwise from straight ahead) that points at the hive. */
+    private double turretAimDeg(Pose pose) {
+        double toHiveDeg = Math.toDegrees(Math.atan2(FIELD_CENTER_Y - pose.y(), FIELD_CENTER_X - pose.x()));
+        double headingDeg = Math.toDegrees(pose.heading());
+        double clockwise = wrapDeg(headingDeg - toHiveDeg) + TURRET_AIM_OFFSET_DEG;
+        return Range.clip(clockwise, TURRET_MIN_DEG, TURRET_MAX_DEG);
+    }
+
+    private void setTurretAngle(double turretDeg) {
+        double clipped = Range.clip(turretDeg, TURRET_MIN_DEG, TURRET_MAX_DEG);
+        double sign = TURRET_REVERSED ? -1.0 : 1.0;
+        double pos = Range.clip(0.5 + sign * clipped * TURRET_GEAR_RATIO / SERVO_RANGE_DEG, 0.0, 1.0);
+        if (turretRight != null) turretRight.setPosition(pos);
+        if (turretLeft != null) turretLeft.setPosition(LEFT_SERVO_OPPOSITE ? 1.0 - pos : pos);
+    }
+
+    private static double wrapDeg(double deg) {
+        while (deg > 180.0) deg -= 360.0;
+        while (deg <= -180.0) deg += 360.0;
+        return deg;
+    }
+
+    // ----------------------------------------------------------------------------------
+    // 8. MECHANISMS
+    // ----------------------------------------------------------------------------------
+    private void initMechanisms() {
+        innerShooter = hardwareMap.get(DcMotorEx.class, INNER_SHOOTER_NAME);
+        outerShooter = hardwareMap.get(DcMotorEx.class, OUTER_SHOOTER_NAME);
+        innerShooter.setDirection(INNER_SHOOTER_DIR);
+        outerShooter.setDirection(OUTER_SHOOTER_DIR);
+        for (DcMotorEx m : new DcMotorEx[]{innerShooter, outerShooter}) {
+            m.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+            m.setMode(DcMotor.RunMode.RUN_USING_ENCODER);   // needed for setVelocity()
+            m.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        }
+
+        innerIntake = hardwareMap.get(DcMotor.class, INNER_INTAKE_NAME);
+        outerIntake = hardwareMap.get(DcMotor.class, OUTER_INTAKE_NAME);
+        innerIntake.setDirection(INNER_INTAKE_DIR);
+        outerIntake.setDirection(OUTER_INTAKE_DIR);
+        for (DcMotor m : new DcMotor[]{innerIntake, outerIntake}) {
+            m.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            m.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        }
+
+        turretRight = hardwareMap.tryGet(Servo.class, TURRET_SERVO_RIGHT_NAME);
+        turretLeft = USE_LEFT_TURRET_SERVO
+                ? hardwareMap.tryGet(Servo.class, TURRET_SERVO_LEFT_NAME) : null;
+    }
+
+    private void setShooterRpm(double rpm) {
+        double ticksPerSecond = rpm * SHOOTER_TICKS_PER_REV / 60.0;
+        innerShooter.setVelocity(ticksPerSecond);
+        outerShooter.setVelocity(ticksPerSecond);
+    }
+
+    private double rpmOf(DcMotorEx motor) {
+        return Math.abs(motor.getVelocity()) * 60.0 / SHOOTER_TICKS_PER_REV;
+    }
+
+    private boolean shooterAtSpeed() {
+        return Math.abs(rpmOf(innerShooter) - AUTO_SHOOTER_RPM) < SHOOTER_RPM_TOLERANCE
+                && Math.abs(rpmOf(outerShooter) - AUTO_SHOOTER_RPM) < SHOOTER_RPM_TOLERANCE;
+    }
+
+    private void stopMechanisms() {
+        if (innerShooter != null) setShooterRpm(0.0);
+        if (innerIntake != null) innerIntake.setPower(0.0);
+        if (outerIntake != null) outerIntake.setPower(0.0);
+    }
+
+    // ----------------------------------------------------------------------------------
+    // 9. FINISHING
+    // ----------------------------------------------------------------------------------
+    private void abort(String reason) {
+        if (stage == ABORTED) return;
+        Scheduler.reset();
+        activePath = null;
+        follower.stop();
+        stage = ABORTED;
+        status = reason;
+        stopMechanisms();
+    }
+
+    private void complete(String message) {
+        stage = COMPLETE;
+        status = message;
+        stopMechanisms();
+        follower.stop();
+    }
+
+    private String stageName() {
+        switch (stage) {
+            case DRIVE_TO_PICKUP: return "Drive to pickup";
+            case COLLECT: return "Collect";
+            case DRIVE_TO_HIVE: return "Drive to hive";
+            case SPIN_UP: return "Wait for flywheels";
+            case FEED: return "Feed and shoot";
+            case RETURN_TO_START: return "Return";
+            case COMPLETE: return "Complete";
+            case ABORTED: return "Aborted";
+            default: return "Idle";
+        }
+    }
+
+    private String poseText(Pose pose) {
+        return String.format("(%.1f, %.1f, %.0f deg)", pose.x(), pose.y(), Math.toDegrees(pose.heading()));
+    }
+
+    private boolean finite(double value) {
+        return !Double.isNaN(value) && !Double.isInfinite(value);
     }
 }
