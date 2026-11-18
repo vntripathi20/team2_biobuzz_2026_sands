@@ -1,11 +1,11 @@
 package org.firstinspires.ftc.teamcode;
 
 import static com.pedropathing.api.Paths.line;
-import static com.pedropathing.ivy.pedro.PedroCommands.follow;
 
 import com.pedropathing.api.PoseFactory;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.ivy.Command;
+import com.pedropathing.ivy.CommandBuilder;
 import com.pedropathing.ivy.Scheduler;
 import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
@@ -292,6 +292,14 @@ public abstract class BioBuzzAuto extends OpMode {
     // ----------------------------------------------------------------------------------
     // 6. PATHS
     // ----------------------------------------------------------------------------------
+    // ivy 1.0.0's PedroCommands.follow targets Pedro 2.x (PathChain); this is the 3.x Path equivalent.
+    private static Command follow(Follower follower, Path path) {
+        CommandBuilder c = new CommandBuilder();
+        c.setStart(() -> follower.follow(path));
+        c.setDone(() -> !follower.isBusy());
+        return c;
+    }
+
     private void schedulePath(Pose to) {
         // Start from the measured pose; the last path may have finished a little short.
         Pose from = follower.pose();

@@ -241,7 +241,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
         limelight.pipelineSwitch(pipeline);
         limelight.start();
 
-        stream.start();
+        //stream.start();
         CameraStreamServer.getInstance().setSource(stream);
 
         // INIT: the alliance is fixed by which OpMode you picked, so we only aim at OUR
@@ -262,7 +262,9 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
 
             LLResult result = limelight.getLatestResult();
             LLResultTypes.FiducialResult hive = null;
-            if (pipeline == APRILTAG_PIPELINE && result != null && result.isValid()) {
+            // Don't gate on result.isValid(): it can be false even while tags are listed.
+            // Instead trust the tag list itself, and ignore stale (old) frames.
+            if (pipeline == APRILTAG_PIPELINE && result != null && result.getStaleness() < 200) {
                 hive = pickHiveTag(result);
             }
 
@@ -336,6 +338,25 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
             // ------------------------------------------------------------------------------
             telemetry.addData("Alliance", redAlliance ? "RED" : "BLUE");
             telemetry.addData("Pipeline", pipeline == APRILTAG_PIPELINE ? "AprilTag" : "Pollen");
+            // DEBUG: what the Limelight is actually reporting, before our alliance filter.
+            StringBuilder seen = new StringBuilder();
+            if (result != null) {
+                for (LLResultTypes.FiducialResult tag : result.getFiducialResults()) {
+                    seen.append(tag.getFiducialId()).append(' ');
+                }
+            }
+            telemetry.addData("LL pipeline index", limelight.getStatus().getPipelineIndex());
+            telemetry.addData("LL result", result == null ? "none"
+                    : result.isValid() ? "valid" : "INVALID");
+            telemetry.addData("LL staleness ms", result == null ? "-" : result.getStaleness());
+            telemetry.addData("LL connected/running", limelight.isConnected() + " / " + limelight.isRunning());
+            telemetry.addData("LL ms since update", limelight.getTimeSinceLastUpdate());
+            telemetry.addData("LL result pipeline", result == null ? "-"
+                    : result.getPipelineIndex() + " (" + result.getPipelineType() + ")");
+            telemetry.addData("LL tag IDs seen",seen.length() == 0 ? "none" : seen.toString().trim());
+            telemetry.addData("Hive tag picked", hive != null ? "ID " + hive.getFiducialId()
+                    : seen.length() > 0 ? "none (seen tags aren't " + (redAlliance ? "RED" : "BLUE") + " hive)"
+                    : "none");
             telemetry.addData("Turret aim", !aimEnabled ? "OFF (holding)"
                     : aimMode.equals("TRACKING") ? "TRACKING (tag in view)"
                     : aimMode.equals("HOLDING") ? "HOLDING (tag out of view)"
