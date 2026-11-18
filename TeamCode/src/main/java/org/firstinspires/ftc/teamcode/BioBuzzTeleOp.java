@@ -183,8 +183,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final String INNER_INTAKE_NAME = "motor2B";
     private static final String OUTER_INTAKE_NAME = "motor3B";
     // TODO: flip a direction if that stage pushes pollen the wrong way.
-    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
-    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
+    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
+    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
     private static final double INTAKE_POWER = 1.0;
     private static final double FEED_POWER = 1.0;   // inner stage power while shooting
 

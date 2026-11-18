@@ -4,8 +4,6 @@ import static com.pedropathing.api.Paths.line;
 
 import com.pedropathing.api.PoseFactory;
 import com.pedropathing.follower.Follower;
-import com.pedropathing.ivy.Command;
-import com.pedropathing.ivy.CommandBuilder;
 import com.pedropathing.ivy.Scheduler;
 import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
@@ -76,6 +74,7 @@ public abstract class BioBuzzAuto extends OpMode {
     private static final double FEED_SECONDS = 3.0;
     private static final double FEED_POWER = 1.0;
     private static final boolean FEED_OUTER_TOO = true;
+    private static final double PATH_START_GRACE_SECONDS = 0.5;   // wait for the follower to start
     private static final double PATH_TIMEOUT_SECONDS = 12.0;   // abort a path that never ends
     private static final double AUTO_TOTAL_SECONDS = 29.0;     // stop everything before 30 s
     private static final boolean RETURN_TO_START_DEFAULT = false;  // TODO: park spot unknown
@@ -101,8 +100,8 @@ public abstract class BioBuzzAuto extends OpMode {
     private static final String OUTER_INTAKE_NAME = "motor3B";
     private static final DcMotorSimple.Direction INNER_SHOOTER_DIR = DcMotorSimple.Direction.REVERSE;
     private static final DcMotorSimple.Direction OUTER_SHOOTER_DIR = DcMotorSimple.Direction.FORWARD;
-    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
-    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
+    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
+    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
 
     // ----------------------------------------------------------------------------------
     // 3. STATE
@@ -123,7 +122,7 @@ public abstract class BioBuzzAuto extends OpMode {
     private DcMotor innerIntake, outerIntake;
     private Servo turretRight, turretLeft;
 
-    private Command activePath;
+    private boolean pathActive = false;
     private final ElapsedTime phaseTimer = new ElapsedTime();
     private final ElapsedTime pathTimer = new ElapsedTime();
     private final ElapsedTime autoTimer = new ElapsedTime();
@@ -192,7 +191,10 @@ public abstract class BioBuzzAuto extends OpMode {
         } else {
             Scheduler.execute();
         }
-        boolean pathRunning = activePath != null && Scheduler.isScheduled(activePath);
+        // A path counts as running for a short grace period after it starts (the follower needs a
+        // loop or two to report busy), then for as long as the follower says it is busy.
+        boolean pathRunning = pathActive
+                && (pathTimer.seconds() < PATH_START_GRACE_SECONDS || follower.isBusy());
 
         if (isPathStage() && pathRunning && pathTimer.seconds() >= PATH_TIMEOUT_SECONDS) {
             abort("PATH TIMEOUT - stopped");
@@ -213,6 +215,8 @@ public abstract class BioBuzzAuto extends OpMode {
         telemetry.addData("Elapsed", "%.1f s", autoTimer.seconds());
         telemetry.addData("Inner / Outer RPM", "%.0f / %.0f", rpmOf(innerShooter), rpmOf(outerShooter));
         telemetry.addData("Turret aim", "%.1f deg", turretAimDeg(pose));
+        telemetry.addData("Path running / follower busy", "%s / %s", pathRunning, follower.isBusy());
+        telemetry.addData("Distance to path end", "%.1f in", follower.distanceToEndpoint());
         telemetry.update();
     }
 
@@ -228,14 +232,14 @@ public abstract class BioBuzzAuto extends OpMode {
     // ----------------------------------------------------------------------------------
     private void updateState(boolean pathRunning) {
         if (stage == DRIVE_TO_PICKUP && !pathRunning) {
-            activePath = null;
+            pathActive = false;
             stage = COLLECT;
             phaseTimer.reset();
             status = "Collecting pollen";
         } else if (stage == COLLECT && phaseTimer.seconds() >= COLLECT_SECONDS) {
             beginHiveTransit();
         } else if (stage == DRIVE_TO_HIVE && !pathRunning) {
-            activePath = null;
+            pathActive = false;
             stage = SPIN_UP;
             phaseTimer.reset();
             status = "At the hive: waiting for flywheels";
@@ -253,7 +257,7 @@ public abstract class BioBuzzAuto extends OpMode {
                 complete("Score sequence complete");
             }
         } else if (stage == RETURN_TO_START && !pathRunning) {
-            activePath = null;
+            pathActive = false;
             complete("Score and return complete");
         }
     }
@@ -292,21 +296,13 @@ public abstract class BioBuzzAuto extends OpMode {
     // ----------------------------------------------------------------------------------
     // 6. PATHS
     // ----------------------------------------------------------------------------------
-    // ivy 1.0.0's PedroCommands.follow targets Pedro 2.x (PathChain); this is the 3.x Path equivalent.
-    private static Command follow(Follower follower, Path path) {
-        CommandBuilder c = new CommandBuilder();
-        c.setStart(() -> follower.follow(path));
-        c.setDone(() -> !follower.isBusy());
-        return c;
-    }
-
     private void schedulePath(Pose to) {
         // Start from the measured pose; the last path may have finished a little short.
         Pose from = follower.pose();
         Path path = line(from, to).linear(from, to);
-        activePath = follow(follower, path);
+        follower.follow(path);
+        pathActive = true;
         pathTimer.reset();
-        Scheduler.schedule(activePath);
     }
 
     private boolean isPathStage() {
@@ -405,7 +401,7 @@ public abstract class BioBuzzAuto extends OpMode {
     private void abort(String reason) {
         if (stage == ABORTED) return;
         Scheduler.reset();
-        activePath = null;
+        pathActive = false;
         follower.stop();
         stage = ABORTED;
         status = reason;

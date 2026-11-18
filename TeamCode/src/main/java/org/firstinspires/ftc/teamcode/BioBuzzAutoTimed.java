@@ -98,8 +98,8 @@ public class BioBuzzAutoTimed extends LinearOpMode {
     private static final String OUTER_INTAKE_NAME = "motor3B";
     private static final DcMotorSimple.Direction INNER_SHOOTER_DIR = DcMotorSimple.Direction.REVERSE;
     private static final DcMotorSimple.Direction OUTER_SHOOTER_DIR = DcMotorSimple.Direction.FORWARD;
-    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
-    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
+    private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
+    private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
 
     // ----------------------------------------------------------------------------------
     // 2. HARDWARE
