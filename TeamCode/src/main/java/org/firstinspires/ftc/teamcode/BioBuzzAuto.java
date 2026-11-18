@@ -66,6 +66,9 @@ public abstract class BioBuzzAuto extends OpMode {
     // ----------------------------------------------------------------------------------
     // 2. SETTINGS - tune on the field.
     // ----------------------------------------------------------------------------------
+    // false: the auto drives the route but never spins the shooter or feeds. It stops when it
+    // reaches the hive spot. Set to true when the shooter is ready.
+    private static final boolean AUTO_USE_SHOOTER = false;
     private static final double COLLECT_SECONDS = 1.0;      // pause at the pickup with intake on
     private static final double INTAKE_POWER = 0.8;
     private static final double AUTO_SHOOTER_RPM = 3000.0;  // TODO: best RPM from the shot spot
@@ -124,6 +127,7 @@ public abstract class BioBuzzAuto extends OpMode {
     private DcMotorEx innerShooter, outerShooter;
     private DcMotor innerIntake, outerIntake;
     private Servo turretRight, turretLeft;
+    private DcMotor[] driveMotors;   // only read, to show what the follower is commanding
     private GoBildaPinpointDriver pinpointCheck;   // only used to show its status on screen
 
     private boolean pathActive = false;
@@ -147,6 +151,9 @@ public abstract class BioBuzzAuto extends OpMode {
         initMechanisms();
         follower = Constants.create(hardwareMap);
         pinpointCheck = hardwareMap.tryGet(GoBildaPinpointDriver.class, "odo");
+        driveMotors = new DcMotor[] {
+                hardwareMap.get(DcMotor.class, "motor0"), hardwareMap.get(DcMotor.class, "motor1"),
+                hardwareMap.get(DcMotor.class, "motor2"), hardwareMap.get(DcMotor.class, "motor3")};
         follower.setPose(startPose());
         follower.update();
         setTurretAngle(0.0);   // the turret must physically be straight ahead at INIT
@@ -230,6 +237,10 @@ public abstract class BioBuzzAuto extends OpMode {
         telemetry.addData("Inner / Outer RPM", "%.0f / %.0f", rpmOf(innerShooter), rpmOf(outerShooter));
         telemetry.addData("Turret aim", "%.1f deg", turretAimDeg(pose));
         telemetry.addData("Path running / follower busy", "%s / %s", pathRunning, follower.isBusy());
+        telemetry.addData("Drive power FL/FR/BL/BR", "%.2f / %.2f / %.2f / %.2f",
+                driveMotors[0].getPower(), driveMotors[1].getPower(),
+                driveMotors[2].getPower(), driveMotors[3].getPower());
+        telemetry.addData("Follower mode", follower.mode());
         telemetry.addData("Distance to path end", "%.1f in", follower.distanceToEndpoint());
         telemetry.update();
     }
@@ -252,6 +263,15 @@ public abstract class BioBuzzAuto extends OpMode {
             status = "Collecting pollen";
         } else if (stage == COLLECT && phaseTimer.seconds() >= COLLECT_SECONDS) {
             beginHiveTransit();
+        } else if (stage == DRIVE_TO_HIVE && !pathRunning && !AUTO_USE_SHOOTER) {
+            pathActive = false;
+            if (returnToStart) {
+                stage = RETURN_TO_START;
+                status = "Returning to start";
+                schedulePath(startPose());
+            } else {
+                complete("Reached the hive spot (shooter off)");
+            }
         } else if (stage == DRIVE_TO_HIVE && !pathRunning) {
             pathActive = false;
             stage = SPIN_UP;
@@ -291,7 +311,7 @@ public abstract class BioBuzzAuto extends OpMode {
         if (stage == DRIVE_TO_PICKUP || stage == COLLECT) {
             inner = INTAKE_POWER;
             outer = INTAKE_POWER;
-        } else if (stage == DRIVE_TO_HIVE || stage == SPIN_UP) {
+        } else if ((stage == DRIVE_TO_HIVE || stage == SPIN_UP) && AUTO_USE_SHOOTER) {
             rpm = AUTO_SHOOTER_RPM;
         } else if (stage == FEED) {
             rpm = AUTO_SHOOTER_RPM;
