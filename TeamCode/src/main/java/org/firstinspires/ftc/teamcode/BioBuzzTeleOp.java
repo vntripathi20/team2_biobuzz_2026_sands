@@ -190,6 +190,11 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
 
     private static final double TRIGGER_THRESHOLD = 0.3;
 
+    // --- AIM TEST MODE ---
+    // true: ONLY the drive and the turret auto-aim run. The shooter and intake stay OFF, so
+    // you can test the Limelight + turret on their own. Set to false for normal driving.
+    private static final boolean AIM_TEST_MODE = true;
+
     // ----------------------------------------------------------------------------------
     // 2. HARDWARE AND STATE
     // ----------------------------------------------------------------------------------
@@ -314,7 +319,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
             // flywheels are at speed, no aim check (a backup if the camera isn't working).
             boolean autoShootHeld = gamepad1.right_trigger > TRIGGER_THRESHOLD;
             boolean manualShootHeld = gamepad1.a;
-            boolean spinning = shooterEnabled || autoShootHeld || manualShootHeld;
+            boolean spinning = !AIM_TEST_MODE && (shooterEnabled || autoShootHeld || manualShootHeld);
 
             updateShooter(spinning);
             boolean atSpeed = shooterAtSpeed(spinning);
@@ -331,11 +336,17 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
             wasReady = readyToShoot;
 
             boolean feedNow = (autoShootHeld && atSpeed && aimed) || (manualShootHeld && atSpeed);
-            updateIntake(feedNow);
+            if (AIM_TEST_MODE) {
+                innerIntake.setPower(0.0);
+                outerIntake.setPower(0.0);
+            } else {
+                updateIntake(feedNow);
+            }
 
             // ------------------------------------------------------------------------------
             // TELEMETRY
             // ------------------------------------------------------------------------------
+            if (AIM_TEST_MODE) telemetry.addLine("AIM TEST MODE: shooter and intake are OFF (only drive + turret aim)");
             telemetry.addData("Alliance", redAlliance ? "RED" : "BLUE");
             telemetry.addData("Pipeline", pipeline == APRILTAG_PIPELINE ? "AprilTag" : "Pollen");
             // DEBUG: what the Limelight is actually reporting, before our alliance filter.
@@ -366,6 +377,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
             } else {
                 telemetry.addData("Turret angle / target", "%.1f / %.1f deg", turretAngle, turretTargetDeg);
             }
+            telemetry.addData("Turret on target", (turretFound() && turretError < TURRET_AIM_TOLERANCE_DEG) ? "YES" : "no");
             telemetry.addData("Hive tx error", haveHive ? String.format("%.1f deg", lastError) : "-");
             telemetry.addData("Gyro yaw (left turn = up)", "%.1f deg", yaw);
             telemetry.addData("Hive distance", haveDistance ? String.format("%.2f m", smoothedDistance) : "-");
