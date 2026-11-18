@@ -7,6 +7,7 @@ import com.pedropathing.follower.Follower;
 import com.pedropathing.ivy.Scheduler;
 import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
+import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -121,6 +122,7 @@ public abstract class BioBuzzAuto extends OpMode {
     private DcMotorEx innerShooter, outerShooter;
     private DcMotor innerIntake, outerIntake;
     private Servo turretRight, turretLeft;
+    private GoBildaPinpointDriver pinpointCheck;   // only used to show its status on screen
 
     private boolean pathActive = false;
     private final ElapsedTime phaseTimer = new ElapsedTime();
@@ -142,6 +144,7 @@ public abstract class BioBuzzAuto extends OpMode {
         Scheduler.reset();
         initMechanisms();
         follower = Constants.create(hardwareMap);
+        pinpointCheck = hardwareMap.tryGet(GoBildaPinpointDriver.class, "odo");
         follower.setPose(startPose());
         follower.update();
         setTurretAngle(0.0);   // the turret must physically be straight ahead at INIT
@@ -155,6 +158,15 @@ public abstract class BioBuzzAuto extends OpMode {
         prevY = gamepad1.y;
 
         follower.setPose(startPose());   // keep the pose tied to the chosen alliance
+        follower.update();
+        if (pinpointCheck != null) {
+            pinpointCheck.update();
+            telemetry.addData("Pinpoint status", pinpointCheck.getDeviceStatus());
+        } else {
+            telemetry.addData("Pinpoint status", "NOT FOUND under the name odo");
+        }
+        telemetry.addData("Pose now", "x %.1f, y %.1f, heading %.1f deg",
+                follower.pose().x(), follower.pose().y(), Math.toDegrees(follower.pose().heading()));
         telemetry.addData("Alliance", redAlliance ? "RED" : "BLUE");
         telemetry.addData("Start", poseText(startPose()));
         telemetry.addData("Pickup", poseText(pickupPose()));
