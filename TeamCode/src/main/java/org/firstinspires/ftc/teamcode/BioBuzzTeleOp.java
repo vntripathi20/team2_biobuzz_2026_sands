@@ -78,7 +78,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final String LIMELIGHT_NAME = "limelight";
     private static final String LIMELIGHT_HOST = "172.29.0.1";
     private static final int LIMELIGHT_STREAM_PORT = 5800;
-    private static final int APRILTAG_PIPELINE = 0;
+    private static final int APRILTAG_PIPELINE = 3;   // the "apriltags" pipeline slot in the Limelight web page
     private static final int POLLEN_PIPELINE = 1;      // TODO: set to your pollen model's pipeline
     // The camera is mounted to see the hive tags, so it can't see pollen on the floor.
     // Leave this false so D-pad right can't switch away from AprilTags and pause aiming.
