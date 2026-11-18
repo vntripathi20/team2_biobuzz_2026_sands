@@ -429,10 +429,13 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
         lastError = smoothedTx - AIM_TARGET_TX_DEG;
         sinceSeen.reset();
 
-        // Camera-space pose: x = right, z = forward (meters). Flat distance to the tag.
+        // Camera-space pose: x = right, y = down, z = forward (meters). We use the full 3D
+        // straight-line distance, so it stays correct when the camera is tilted up at the hive.
         Pose3D pose = hive.getTargetPoseCameraSpace();
         if (pose != null) {
-            double distance = Math.hypot(pose.getPosition().x, pose.getPosition().z);
+            double distance = Math.sqrt(pose.getPosition().x * pose.getPosition().x
+                    + pose.getPosition().y * pose.getPosition().y
+                    + pose.getPosition().z * pose.getPosition().z);
             if (distance > 0.0) {
                 smoothedDistance = haveDistance
                         ? DISTANCE_SMOOTHING * distance + (1 - DISTANCE_SMOOTHING) * smoothedDistance
