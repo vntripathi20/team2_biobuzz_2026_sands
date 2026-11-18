@@ -32,7 +32,7 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  *   SHOOTER:   The flywheel RPM is picked from the distance to the hive tag using the
  *              SHOOTER_TABLE below. The feed only runs once the turret is aimed and the
  *              flywheels are up to speed.
- *   INTAKE:    Two stages. Outer = motor1B (picks pollen off the floor), inner = motor0B
+ *   INTAKE:    Two stages. Outer = motor3B (picks pollen off the floor), inner = motor2B
  *              (moves it toward the shooter).
  *
  * RUN "BioBuzz TeleOp BLUE" or "BioBuzz TeleOp RED" (BioBuzzTeleOpBlue / BioBuzzTeleOpRed).
@@ -59,7 +59,7 @@ import org.firstinspires.ftc.robotcore.external.stream.CameraStreamServer;
  *     here, so the code assumes the turret starts straight ahead at init.
  *   - Fill in every "TODO" in the TURRET section: TURRET_GEAR_RATIO, SERVO_RANGE_DEG,
  *     the limits, the direction, and where the camera is mounted.
- *   - Shooter motors (motor2B, motor3B) need their encoders plugged in, because the
+ *   - Shooter motors (motor0B, motor1B) need their encoders plugged in, because the
  *     flywheel runs on velocity control.
  * ======================================================================================
  */
@@ -156,8 +156,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
             RevHubOrientationOnRobot.UsbFacingDirection.FORWARD;
 
     // --- Shooter ---
-    private static final String INNER_SHOOTER_NAME = "motor2B";
-    private static final String OUTER_SHOOTER_NAME = "motor3B";
+    private static final String INNER_SHOOTER_NAME = "motor0B";
+    private static final String OUTER_SHOOTER_NAME = "motor1B";
     // TODO: flywheels usually spin opposite ways. Flip one if a wheel spins backwards.
     private static final DcMotorSimple.Direction INNER_SHOOTER_DIR = DcMotorSimple.Direction.REVERSE;
     private static final DcMotorSimple.Direction OUTER_SHOOTER_DIR = DcMotorSimple.Direction.FORWARD;
@@ -180,8 +180,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final double DISTANCE_SMOOTHING = 0.3;
 
     // --- Intake ---
-    private static final String INNER_INTAKE_NAME = "motor0B";
-    private static final String OUTER_INTAKE_NAME = "motor1B";
+    private static final String INNER_INTAKE_NAME = "motor2B";
+    private static final String OUTER_INTAKE_NAME = "motor3B";
     // TODO: flip a direction if that stage pushes pollen the wrong way.
     private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
     private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;

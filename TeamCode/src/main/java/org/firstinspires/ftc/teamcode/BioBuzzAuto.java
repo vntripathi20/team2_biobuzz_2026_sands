@@ -95,10 +95,10 @@ public abstract class BioBuzzAuto extends OpMode {
     private static final boolean AUTO_AIM_TURRET = true;
 
     // --- Hardware names and directions (match BioBuzzTeleOp) ---
-    private static final String INNER_SHOOTER_NAME = "motor2B";
-    private static final String OUTER_SHOOTER_NAME = "motor3B";
-    private static final String INNER_INTAKE_NAME = "motor0B";
-    private static final String OUTER_INTAKE_NAME = "motor1B";
+    private static final String INNER_SHOOTER_NAME = "motor0B";
+    private static final String OUTER_SHOOTER_NAME = "motor1B";
+    private static final String INNER_INTAKE_NAME = "motor2B";
+    private static final String OUTER_INTAKE_NAME = "motor3B";
     private static final DcMotorSimple.Direction INNER_SHOOTER_DIR = DcMotorSimple.Direction.REVERSE;
     private static final DcMotorSimple.Direction OUTER_SHOOTER_DIR = DcMotorSimple.Direction.FORWARD;
     private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.REVERSE;
