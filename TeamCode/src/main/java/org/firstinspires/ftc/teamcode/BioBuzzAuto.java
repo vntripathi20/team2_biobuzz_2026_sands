@@ -101,6 +101,8 @@ public abstract class BioBuzzAuto extends OpMode {
     private static final String OUTER_INTAKE_NAME = "motor3B";
     private static final DcMotorSimple.Direction INNER_SHOOTER_DIR = DcMotorSimple.Direction.REVERSE;
     private static final DcMotorSimple.Direction OUTER_SHOOTER_DIR = DcMotorSimple.Direction.FORWARD;
+    // The outer shooter motor is loose right now, so it is switched OFF. Set to true to use it.
+    private static final boolean USE_OUTER_SHOOTER = false;
     private static final DcMotorSimple.Direction INNER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
     private static final DcMotorSimple.Direction OUTER_INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
 
@@ -389,7 +391,7 @@ public abstract class BioBuzzAuto extends OpMode {
     private void setShooterRpm(double rpm) {
         double ticksPerSecond = rpm * SHOOTER_TICKS_PER_REV / 60.0;
         innerShooter.setVelocity(ticksPerSecond);
-        outerShooter.setVelocity(ticksPerSecond);
+        if (USE_OUTER_SHOOTER) outerShooter.setVelocity(ticksPerSecond);
     }
 
     private double rpmOf(DcMotorEx motor) {
@@ -398,7 +400,8 @@ public abstract class BioBuzzAuto extends OpMode {
 
     private boolean shooterAtSpeed() {
         return Math.abs(rpmOf(innerShooter) - AUTO_SHOOTER_RPM) < SHOOTER_RPM_TOLERANCE
-                && Math.abs(rpmOf(outerShooter) - AUTO_SHOOTER_RPM) < SHOOTER_RPM_TOLERANCE;
+                && (!USE_OUTER_SHOOTER
+                || Math.abs(rpmOf(outerShooter) - AUTO_SHOOTER_RPM) < SHOOTER_RPM_TOLERANCE);
     }
 
     private void stopMechanisms() {
