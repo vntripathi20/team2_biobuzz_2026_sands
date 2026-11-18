@@ -9,7 +9,6 @@ import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
 import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
-import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -28,8 +27,10 @@ import org.firstinspires.ftc.teamcode.pedro.Constants;
  *            shooting spot (flywheels spin up on the way) -> aim the turret at the hive ->
  *            wait for flywheels -> feed and shoot -> (optional) return to the start.
  *
+ * RUN "BioBuzz Auto BLUE" or "BioBuzz Auto RED" (BioBuzzAutoBlue / BioBuzzAutoRed). This
+ * class holds all the logic; those two just pick the alliance.
+ *
  * INIT CONTROLS (gamepad 1):
- *   X = BLUE alliance      B = RED alliance
  *   A = toggle the pickup run     Y = toggle returning to the start spot at the end
  *
  * START POSITION: against your alliance wall, centered on the field's middle seam
@@ -46,8 +47,12 @@ import org.firstinspires.ftc.teamcode.pedro.Constants;
  * names to match the Robot Configuration (Pinpoint named "odo").
  * ======================================================================================
  */
-@Autonomous(name = "BioBuzz Autonomous", group = "Autonomous")
-public class BioBuzzAuto extends OpMode {
+public abstract class BioBuzzAuto extends OpMode {
+
+    /** Called by BioBuzzAutoBlue / BioBuzzAutoRed, which are the two OpModes you run. */
+    protected BioBuzzAuto(boolean redAlliance) {
+        this.redAlliance = redAlliance;
+    }
 
     // ----------------------------------------------------------------------------------
     // 1. FIELD POSES (inches, degrees). RED values; BLUE is mirrored by rotating 180 deg
@@ -123,7 +128,7 @@ public class BioBuzzAuto extends OpMode {
     private final ElapsedTime pathTimer = new ElapsedTime();
     private final ElapsedTime autoTimer = new ElapsedTime();
 
-    private boolean redAlliance = false;
+    private final boolean redAlliance;
     private boolean runPickup = true;
     private boolean returnToStart = RETURN_TO_START_DEFAULT;
     private boolean prevA, prevY;
@@ -145,8 +150,6 @@ public class BioBuzzAuto extends OpMode {
 
     @Override
     public void init_loop() {
-        if (gamepad1.x) redAlliance = false;
-        if (gamepad1.b) redAlliance = true;
         if (gamepad1.a && !prevA) runPickup = !runPickup;
         if (gamepad1.y && !prevY) returnToStart = !returnToStart;
         prevA = gamepad1.a;
@@ -160,7 +163,7 @@ public class BioBuzzAuto extends OpMode {
         telemetry.addData("Route", "pickup %s, return to start %s",
                 runPickup ? "on" : "skip", returnToStart ? "on" : "off");
         telemetry.addData("Turret servo", turretRight != null ? "found" : "NOT FOUND (servo5B)");
-        telemetry.addLine("X = BLUE, B = RED | A = pickup on/off | Y = return to start on/off");
+        telemetry.addLine("A = pickup on/off | Y = return to start on/off");
         telemetry.addLine("Against your wall, centered on Y=72, facing in. Turret straight ahead.");
         telemetry.update();
     }
