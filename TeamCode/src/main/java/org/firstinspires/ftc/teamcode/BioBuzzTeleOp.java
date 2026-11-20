@@ -135,7 +135,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final double TURRET_AIM_TOLERANCE_DEG = 2.0;
     // TODO: true if the Limelight is bolted to the turret (it turns with the shooter).
     // False if it's fixed to the robot body.
-    private static final boolean CAMERA_ON_TURRET = false;
+    private static final boolean CAMERA_ON_TURRET = true;   // the Limelight turns with the turret
     // Which way the camera faces compared with the turret's zero ("straight ahead"):
     // 0 = the same way, 180 = backwards. Positive = camera points to the right.
     private static final double CAMERA_YAW_OFFSET_DEG = 0.0;   // TODO
