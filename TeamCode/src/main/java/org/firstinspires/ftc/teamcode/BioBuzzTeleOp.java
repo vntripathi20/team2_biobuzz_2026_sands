@@ -133,6 +133,10 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final double TURRET_MAX_DEG = 90.0;
     // "Aimed" means the turret is within this many degrees of where it should point.
     private static final double TURRET_AIM_TOLERANCE_DEG = 2.0;
+    // For a camera ON the turret: each loop the turret moves only this fraction of the
+    // remaining camera error. Lower = slower but steadier. If the turret swings back and
+    // forth (overshoots), LOWER this. If it creeps too slowly toward the tag, RAISE it.
+    private static final double TURRET_AIM_GAIN = 0.35;
     // TODO: true if the Limelight is bolted to the turret (it turns with the shooter).
     // False if it's fixed to the robot body.
     private static final boolean CAMERA_ON_TURRET = true;   // the Limelight turns with the turret
@@ -286,8 +290,14 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
                 // Where the hive is, relative to the robot's front, clockwise positive. A
                 // camera on the turret reports the tag relative to the turret, so add the
                 // turret angle to get back to the robot's frame.
+                // On a turret camera we correct only part of the error each loop (gain) and
+                // ignore tiny errors (dead zone), which stops it hunting left and right.
+                double aimError = lastError;
+                if (CAMERA_ON_TURRET) {
+                    aimError = Math.abs(lastError) < AIM_TOLERANCE_DEG ? 0.0 : lastError * TURRET_AIM_GAIN;
+                }
                 double bearing = (CAMERA_ON_TURRET ? turretAngle : 0.0)
-                        + CAMERA_YAW_OFFSET_DEG + lastError;
+                        + CAMERA_YAW_OFFSET_DEG + aimError;
                 // Remember it in the gyro's frame so it survives the robot turning.
                 // (yaw is counterclockwise, bearing is clockwise, hence the minus.)
                 hiveYawDeg = wrapDeg(yaw - bearing);
