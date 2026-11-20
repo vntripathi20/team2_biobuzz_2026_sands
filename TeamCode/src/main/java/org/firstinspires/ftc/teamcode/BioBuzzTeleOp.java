@@ -97,7 +97,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     // shooter. Aim the shooter at the hive by hand, read tx, and enter it. Leave it 0 for a
     // camera mounted on the robot body and use CAMERA_YAW_OFFSET_DEG instead.
     private static final double AIM_TARGET_TX_DEG = 0.0;   // TODO
-    private static final double TX_SMOOTHING = 0.5;
+    private static final double TX_SMOOTHING = 1.0;   // 1.0 = no smoothing (corrections are sparse now)
     // For a camera on the turret: "aimed" means the tag is within this many degrees of the
     // target tx.
     private static final double AIM_TOLERANCE_DEG = 1.5;
@@ -126,7 +126,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private static final double SERVO_RANGE_DEG = 355.0;
     // The servos have no feedback, so we assume the turret moves at this speed to estimate
     // its angle. TODO: time a real sweep and update. Lower = more cautious about "aimed".
-    private static final double TURRET_SPEED_DEG_PER_SEC = 180.0;
+    private static final double TURRET_SPEED_DEG_PER_SEC = 360.0;
     // TODO: how far the turret may turn each way, so it never hits a stop or winds wires.
     // Keep this inside what the servo's travel allows after the gear ratio.
     private static final double TURRET_MIN_DEG = -90.0;
@@ -136,7 +136,11 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     // For a camera ON the turret: each loop the turret moves only this fraction of the
     // remaining camera error. Lower = slower but steadier. If the turret swings back and
     // forth (overshoots), LOWER this. If it creeps too slowly toward the tag, RAISE it.
-    private static final double TURRET_AIM_GAIN = 0.6;
+    // Minimum time between corrections. The turret needs a moment to physically move before
+    // the camera can show the result, so we wait this long instead of re-correcting from
+    // the same old picture. LOWER = snappier but may swing; RAISE = steadier but slower.
+    private static final double TURRET_SETTLE_MS = 80.0;
+    private static final double TURRET_AIM_GAIN = 0.5;
     // TODO: true if the Limelight is bolted to the turret (it turns with the shooter).
     // False if it's fixed to the robot body.
     private static final boolean CAMERA_ON_TURRET = true;   // the Limelight turns with the turret
@@ -237,6 +241,9 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     // Where the turret is being told to point (degrees clockwise from straight ahead).
     private double turretTargetDeg = 0.0;
     private final ElapsedTime loopClock = new ElapsedTime();
+    private final ElapsedTime sinceCorrection = new ElapsedTime();
+    private double lastFrameStamp = -1.0;   // the last camera frame we used
+    private int lockedTagId = -1;           // the hive tag we are following (-1 = none)
     private boolean haveDistance = false;
     private double smoothedDistance = 0.0;
     private double targetRpm = DEFAULT_SHOOTER_RPM;
@@ -288,7 +295,14 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
             // ------------------------------------------------------------------------------
             // HIVE TRACKING
             // ------------------------------------------------------------------------------
-            if (hive != null) {
+            // Use each camera frame once, and only after the turret has had time to move.
+            boolean newFrame = hive != null && result.getTimestamp() != lastFrameStamp
+                    && sinceCorrection.milliseconds() >= TURRET_SETTLE_MS;
+            // Let go of the locked tag if it has been gone for a while.
+            if (hive == null && sinceSeen.seconds() > 0.5) lockedTagId = -1;
+            if (newFrame) {
+                lastFrameStamp = result.getTimestamp();
+                sinceCorrection.reset();
                 updateHiveTracking(hive);
                 // Where the hive is, relative to the robot's front, clockwise positive. A
                 // camera on the turret reports the tag relative to the turret, so add the
@@ -441,12 +455,15 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
         double bestOffset = Double.MAX_VALUE;
         for (LLResultTypes.FiducialResult tag : result.getFiducialResults()) {
             if (!isHiveTag(tag.getFiducialId())) continue;
+            // Stick with the tag we are already following, so we don't flip between two tags.
+            if (tag.getFiducialId() == lockedTagId) return tag;
             double offset = Math.abs(tag.getTargetXDegrees() - AIM_TARGET_TX_DEG);
             if (offset < bestOffset) {
                 bestOffset = offset;
                 best = tag;
             }
         }
+        if (best != null) lockedTagId = best.getFiducialId();
         return best;
     }
 
