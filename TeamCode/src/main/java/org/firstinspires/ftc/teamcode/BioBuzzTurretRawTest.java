@@ -18,7 +18,7 @@ import com.qualcomm.robotcore.util.Range;
  *   D-pad left      nudge the position down by 0.02
  *   A               go to the CENTER (0.50)
  *   X               go to 0.35        B   go to 0.65
- *   Y               switch which servo you are moving (right servo5B <-> left servo0B)
+ *   Y               cycle: RIGHT servo only -> LEFT servo only -> BOTH together (left mirrored)
  *
  * SAFETY: the position is kept between MIN_POS and MAX_POS, which are close to the center,
  * so the first test can't slam the turret into a stop. Widen them once you know how far
@@ -37,8 +37,12 @@ public class BioBuzzTurretRawTest extends LinearOpMode {
 
     private static final String RIGHT_SERVO = "servo5B";
     private static final String LEFT_SERVO = "servo0B";   // not plugged in yet; Y switches to it
+    private static final boolean LEFT_OPPOSITE = true;   // in BOTH mode the left gets 1 - position
     private static final double MIN_POS = 0.30;
     private static final double MAX_POS = 0.70;
+    // BOTH mode is limited to this smaller range, in case the two servos push against each other.
+    private static final double BOTH_MIN = 0.42;
+    private static final double BOTH_MAX = 0.58;
     private static final double SWEEP_PER_SEC = 0.15;
     private static final double STEP = 0.02;
 
@@ -53,7 +57,7 @@ public class BioBuzzTurretRawTest extends LinearOpMode {
         }
 
         double pos = 0.5;
-        boolean useLeft = false;
+        int mode = 0;   // 0 = right only, 1 = left only, 2 = both
         boolean prevLeft = false, prevRight = false, prevY = false;
         ElapsedTime clock = new ElapsedTime();
 
@@ -79,17 +83,27 @@ public class BioBuzzTurretRawTest extends LinearOpMode {
             if (gamepad1.a) pos = 0.5;
             if (gamepad1.x) pos = 0.35;
             if (gamepad1.b) pos = 0.65;
-            if (gamepad1.y && !prevY) useLeft = !useLeft;
+            if (gamepad1.y && !prevY) {
+                mode = (mode + 1) % 3;
+                if (mode == 2) pos = 0.5;   // start BOTH from the center
+            }
             prevY = gamepad1.y;
-            pos = Range.clip(pos, MIN_POS, MAX_POS);
+            pos = mode == 2 ? Range.clip(pos, BOTH_MIN, BOTH_MAX) : Range.clip(pos, MIN_POS, MAX_POS);
 
-            Servo active = useLeft ? left : right;
-            if (active != null) active.setPosition(pos);
+            Servo active = mode == 1 ? left : right;
+            if (mode == 2) {
+                if (right != null) right.setPosition(pos);
+                if (left != null) left.setPosition(LEFT_OPPOSITE ? 1.0 - pos : pos);
+            } else if (active != null) {
+                active.setPosition(pos);
+            }
 
-            telemetry.addData("Moving", useLeft ? LEFT_SERVO + " (left)" : RIGHT_SERVO + " (right)");
-            telemetry.addData("Servo found", active != null ? "yes" : "NO - nothing can move");
+            telemetry.addData("Moving", mode == 0 ? RIGHT_SERVO + " (right only)"
+                    : mode == 1 ? LEFT_SERVO + " (left only)" : "BOTH (left mirrored = " + LEFT_OPPOSITE + ")");
+            telemetry.addData("Servo found", mode == 2 ? (right != null && left != null ? "both" : "MISSING ONE")
+                    : active != null ? "yes" : "NO - nothing can move");
             telemetry.addData("Position", "%.3f   (allowed %.2f to %.2f)", pos, MIN_POS, MAX_POS);
-            telemetry.addLine("Stick = sweep | D-pad = nudge | A center | X 0.35 | B 0.65 | Y = other servo");
+            telemetry.addLine("Stick = sweep | D-pad = nudge | A center | X 0.35 | B 0.65 | Y = right / left / both");
             telemetry.update();
         }
     }
