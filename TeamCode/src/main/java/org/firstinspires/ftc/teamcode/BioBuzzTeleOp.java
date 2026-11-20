@@ -139,8 +139,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     // Minimum time between corrections. The turret needs a moment to physically move before
     // the camera can show the result, so we wait this long instead of re-correcting from
     // the same old picture. LOWER = snappier but may swing; RAISE = steadier but slower.
-    private static final double TURRET_SETTLE_MS = 80.0;
-    private static final double TURRET_AIM_GAIN = 0.5;
+    private static final double TURRET_SETTLE_MS = 40.0;
+    private static final double TURRET_AIM_GAIN = 0.6;
     // TODO: true if the Limelight is bolted to the turret (it turns with the shooter).
     // False if it's fixed to the robot body.
     private static final boolean CAMERA_ON_TURRET = true;   // the Limelight turns with the turret
