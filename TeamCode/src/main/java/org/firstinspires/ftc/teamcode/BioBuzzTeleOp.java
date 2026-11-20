@@ -136,7 +136,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     // For a camera ON the turret: each loop the turret moves only this fraction of the
     // remaining camera error. Lower = slower but steadier. If the turret swings back and
     // forth (overshoots), LOWER this. If it creeps too slowly toward the tag, RAISE it.
-    private static final double TURRET_AIM_GAIN = 0.35;
+    private static final double TURRET_AIM_GAIN = 0.6;
     // TODO: true if the Limelight is bolted to the turret (it turns with the shooter).
     // False if it's fixed to the robot body.
     private static final boolean CAMERA_ON_TURRET = true;   // the Limelight turns with the turret
@@ -236,6 +236,7 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
     private double hiveYawDeg = 0.0;
     // Where the turret is being told to point (degrees clockwise from straight ahead).
     private double turretTargetDeg = 0.0;
+    private final ElapsedTime loopClock = new ElapsedTime();
     private boolean haveDistance = false;
     private double smoothedDistance = 0.0;
     private double targetRpm = DEFAULT_SHOOTER_RPM;
@@ -268,6 +269,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
         if (isStopRequested()) return;
 
         while (opModeIsActive()) {
+            double loopMs = loopClock.milliseconds();
+            loopClock.reset();
             handleToggles();
             handlePipelineButtons();
 
@@ -389,6 +392,8 @@ public abstract class BioBuzzTeleOp extends LinearOpMode {
             } else {
                 telemetry.addData("Turret angle / target", "%.1f / %.1f deg", turretAngle, turretTargetDeg);
             }
+            telemetry.addData("Loop time (ms)", "%.0f", loopMs);
+            telemetry.addData("Tag data age (ms)", (result != null) ? String.valueOf(result.getStaleness()) : "-");
             telemetry.addData("Turret on target", (turretFound() && turretError < TURRET_AIM_TOLERANCE_DEG) ? "YES" : "no");
             telemetry.addData("Hive tx error", haveHive ? String.format("%.1f deg", lastError) : "-");
             telemetry.addData("Gyro yaw (left turn = up)", "%.1f deg", yaw);
